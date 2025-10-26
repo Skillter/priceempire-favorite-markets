@@ -37,6 +37,14 @@
         localStorage.setItem(SERVER_UNFAVORITED_KEY, JSON.stringify(uniqueUnfavs));
     }
 
+    function getPriceFromCard(card) {
+        const priceElement = card.querySelector('span.text-3xl.font-bold.text-theme-100');
+        if (!priceElement) return Infinity; // Cards without price go to the end
+        const priceText = priceElement.textContent.trim();
+        const priceValue = parseFloat(priceText.replace(/[^0-9.]/g, ''));
+        return isNaN(priceValue) ? Infinity : priceValue;
+    }
+
     function updateStarIcon(starIcon, isFavorite) {
         if (!starIcon) return;
         const isUnfavoritedIcon = starIcon.classList.contains('i-material-symbols-light:kid-star-outline');
@@ -75,12 +83,12 @@
             const destinationGrid = marketplaceSections[originalSectionTitle] || marketplaceSections['Other Marketplaces'];
 
             if (destinationGrid) {
-                 // Insert in alphabetical sorting for consistency
-                const cardTitle = card.querySelector('a.font-semibold')?.textContent.trim().toLowerCase();
+                 // Insert in price order (cheapest first)
+                const cardPrice = getPriceFromCard(card);
                 const siblings = Array.from(destinationGrid.children);
                 const insertBeforeNode = siblings.find(sibling => {
-                    const siblingTitle = sibling.querySelector('a.font-semibold')?.textContent.trim().toLowerCase();
-                    return siblingTitle && siblingTitle > cardTitle;
+                    const siblingPrice = getPriceFromCard(sibling);
+                    return siblingPrice > cardPrice;
                 });
                 destinationGrid.insertBefore(card, insertBeforeNode || null);
 
@@ -103,7 +111,15 @@
                 saveServerUnfavorited(serverUnfavorited);
             }
 
-            pinnedMarketplacesGrid.appendChild(card);
+            // Insert in price order (cheapest first)
+            const cardPrice = getPriceFromCard(card);
+            const siblings = Array.from(pinnedMarketplacesGrid.children);
+            const insertBeforeNode = siblings.find(sibling => {
+                const siblingPrice = getPriceFromCard(sibling);
+                return siblingPrice > cardPrice;
+            });
+            pinnedMarketplacesGrid.insertBefore(card, insertBeforeNode || null);
+
             updateStarIcon(starIcon, true);
         }
         saveFavorites(favorites);
@@ -194,7 +210,16 @@
                 const marketplaceName = card.querySelector('a.font-semibold')?.textContent.trim() || card.querySelector('img')?.alt;
                 if (marketplaceName && favorites.includes(marketplaceName)) {
                     card.dataset.originalSection = title; // Store its origin
-                    pinnedMarketplacesGrid.appendChild(card);
+
+                    // Insert in price order (cheapest first)
+                    const cardPrice = getPriceFromCard(card);
+                    const siblings = Array.from(pinnedMarketplacesGrid.children);
+                    const insertBeforeNode = siblings.find(sibling => {
+                        const siblingPrice = getPriceFromCard(sibling);
+                        return siblingPrice > cardPrice;
+                    });
+                    pinnedMarketplacesGrid.insertBefore(card, insertBeforeNode || null);
+
                     const starIcon = card.querySelector('.iconify[class*="star"]');
                     updateStarIcon(starIcon, true);
                 }
