@@ -13,6 +13,7 @@
     'use strict';
 
     const FAVORITES_KEY = 'pricempire_multi_favorites';
+    const SERVER_UNFAVORITED_KEY = 'pricempire_server_unfavorited'; // Track client-side unfavorited server items
     let pinnedMarketplacesGrid = null;
     const marketplaceSections = {}; //Cache for marketplace grid elements
 
@@ -24,6 +25,16 @@
     function saveFavorites(favs) {
         const uniqueFavs = [...new Set(favs)];
         localStorage.setItem(FAVORITES_KEY, JSON.stringify(uniqueFavs));
+    }
+
+    function getServerUnfavorited() {
+        const unfavs = localStorage.getItem(SERVER_UNFAVORITED_KEY);
+        return unfavs ? JSON.parse(unfavs) : [];
+    }
+
+    function saveServerUnfavorited(unfavs) {
+        const uniqueUnfavs = [...new Set(unfavs)];
+        localStorage.setItem(SERVER_UNFAVORITED_KEY, JSON.stringify(uniqueUnfavs));
     }
 
     function updateStarIcon(starIcon, isFavorite) {
@@ -46,11 +57,20 @@
         if (!marketplaceName || !starIcon || !pinnedMarketplacesGrid) return;
 
         let favorites = getFavorites();
+        let serverUnfavorited = getServerUnfavorited();
         const isFavorite = favorites.includes(marketplaceName);
+        const isServerFavorited = card.dataset.serverFavorited === 'true';
 
         if (isFavorite) {
             // unfavorite
             favorites = favorites.filter(fav => fav !== marketplaceName);
+
+            // If this was server-favorited, remember user unfavorited it
+            if (isServerFavorited && !serverUnfavorited.includes(marketplaceName)) {
+                serverUnfavorited.push(marketplaceName);
+                saveServerUnfavorited(serverUnfavorited);
+            }
+
             const originalSectionTitle = card.dataset.originalSection;
             const destinationGrid = marketplaceSections[originalSectionTitle] || marketplaceSections['Other Marketplaces'];
 
@@ -76,6 +96,13 @@
                  card.dataset.originalSection = sectionTitle || 'Other Marketplaces';
             }
             favorites.push(marketplaceName);
+
+            // Remove from server unfavorited list if re-favoriting
+            if (serverUnfavorited.includes(marketplaceName)) {
+                serverUnfavorited = serverUnfavorited.filter(name => name !== marketplaceName);
+                saveServerUnfavorited(serverUnfavorited);
+            }
+
             pinnedMarketplacesGrid.appendChild(card);
             updateStarIcon(starIcon, true);
         }
@@ -126,22 +153,39 @@
     function applyFavoritesOnLoad() {
         if (!pinnedMarketplacesGrid) return;
         let favorites = getFavorites();
+        const serverUnfavorited = getServerUnfavorited();
         let favoritesUpdated = false;
 
         Object.entries(marketplaceSections).forEach(([title, grid]) => {
             if (title === 'Pinned Marketplaces') {
-                // Process server-side pinned items: add to our favorites and set default originalSection
+                // Process server-side pinned items
                 Array.from(grid.children).forEach(card => {
                     const marketplaceName = card.querySelector('a.font-semibold')?.textContent.trim() || card.querySelector('img')?.alt;
-                    if (marketplaceName && !favorites.includes(marketplaceName)) {
-                        favorites.push(marketplaceName);
-                        favoritesUpdated = true;
-                    }
+
+                    // Mark as server-favorited
+                    card.dataset.serverFavorited = 'true';
+
                     if (!card.dataset.originalSection) {
                         card.dataset.originalSection = 'Other Marketplaces'; // Default fallback
                     }
-                    const starIcon = card.querySelector('.iconify[class*="star"]');
-                    updateStarIcon(starIcon, true);
+
+                    // If user unfavorited this server item, move it back
+                    if (serverUnfavorited.includes(marketplaceName)) {
+                        const destinationGrid = marketplaceSections[card.dataset.originalSection] || marketplaceSections['Other Marketplaces'];
+                        if (destinationGrid) {
+                            destinationGrid.appendChild(card);
+                            const starIcon = card.querySelector('.iconify[class*="star"]');
+                            updateStarIcon(starIcon, false);
+                        }
+                    } else {
+                        // Add to client favorites if not already there
+                        if (marketplaceName && !favorites.includes(marketplaceName)) {
+                            favorites.push(marketplaceName);
+                            favoritesUpdated = true;
+                        }
+                        const starIcon = card.querySelector('.iconify[class*="star"]');
+                        updateStarIcon(starIcon, true);
+                    }
                 });
                 return;
             }
