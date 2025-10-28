@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "allowJs": true,
+    // Crucial setting: Includes browser object definitions (Window, Document, Fetch, etc.)
+    "lib": ["dom", "es2020"] 
+  },
+  "include": ["**/*.js"]
+}
