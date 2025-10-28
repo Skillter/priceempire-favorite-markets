@@ -1,0 +1,24 @@
+{
+  "name": "priceempire-favorite-markets",
+  "version": "1.0.0",
+  "description": "Pricempire only lets you favorite one marketplace at a time, which is annoying if you compare prices across multiple platforms. This userscript removes that limitation by letting you pin as many marketplaces as you want. Just click the star icons to create your own \"Pinned Marketplaces\" section that persists across sessions.",
+  "main": "priceempire-favorite-markets.user.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Skillter/priceempire-favorite-markets.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Skillter/priceempire-favorite-markets/issues"
+  },
+  "homepage": "https://github.com/Skillter/priceempire-favorite-markets#readme",
+  "devDependencies": {
+    "@types/greasemonkey": "^4.0.7"
+  }
+}
