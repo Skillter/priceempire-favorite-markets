@@ -78,12 +78,22 @@
         const settings = getSettings();
         if (!settings.autoExpandOffers) return;
 
-        const showMoreBtn = document.querySelector('button[aria-label="Show more offers"]');
-        if (showMoreBtn && !showMoreBtn.dataset.pmfClicked) {
-            showMoreBtn.dataset.pmfClicked = 'true';
-            showMoreBtn.click();
-            setTimeout(autoExpandOffers, 500); // Keep clicking if more buttons appear
-        }
+        const expandNextButton = () => {
+            const showMoreBtns = document.querySelectorAll('button[aria-label="Show more offers"]');
+            if (showMoreBtns.length === 0) return; // No more buttons
+
+            // Find first unclicked button
+            for (let btn of showMoreBtns) {
+                if (!btn.dataset.pmfClicked) {
+                    btn.dataset.pmfClicked = 'true';
+                    btn.click();
+                    setTimeout(expandNextButton, 800); // Wait for content to load, then check for next button
+                    return;
+                }
+            }
+        };
+
+        expandNextButton();
     }
 
     function toggleFavorite(card) {
