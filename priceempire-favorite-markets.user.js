@@ -21,7 +21,8 @@
     // Default settings - all features enabled by default
     const defaultSettings = {
         multiFavorite: true,
-        autoExpandOffers: true
+        autoExpandOffers: true,
+        mergeSponsoredMarkets: true
     };
 
     function getSettings() {
@@ -61,17 +62,145 @@
         return isNaN(priceValue) ? Infinity : priceValue;
     }
 
+    function getFavoriteStarIcon(card) {
+        // Find the correct star icon - it should have material-symbols-light classes
+        return card.querySelector('.iconify[class*="i-material-symbols-light:"]');
+    }
+
     function updateStarIcon(starIcon, isFavorite) {
         if (!starIcon) return;
         const isUnfavoritedIcon = starIcon.classList.contains('i-material-symbols-light:kid-star-outline');
 
         if (isFavorite && isUnfavoritedIcon) {
             starIcon.classList.replace('i-material-symbols-light:kid-star-outline', 'i-material-symbols-light:family-star-sharp');
+            starIcon.classList.remove('text-theme-400');
             starIcon.classList.add('text-yellow-500');
         } else if (!isFavorite && !isUnfavoritedIcon) {
             starIcon.classList.replace('i-material-symbols-light:family-star-sharp', 'i-material-symbols-light:kid-star-outline');
             starIcon.classList.remove('text-yellow-500');
+            starIcon.classList.add('text-theme-400');
         }
+    }
+
+    function isSponsored(card) {
+        const bgDiv = card.querySelector('.bg-theme-700.ring-1.ring-theme-800');
+        return bgDiv !== null;
+    }
+
+    function normalizeSponsored(card) {
+        if (!isSponsored(card)) return;
+        card.dataset.isSponsored = 'true';
+
+        const bgDiv = card.querySelector('.bg-theme-700.ring-1.ring-theme-800');
+        if (bgDiv) {
+            bgDiv.classList.remove('bg-theme-700', 'ring-1', 'ring-theme-800');
+            bgDiv.classList.add('bg-theme-800');
+        }
+
+        // Normalize button styling from gradient to theme color
+        const buttons = card.querySelectorAll('[class*="bg-gradient-to-r"]');
+        buttons.forEach(btn => {
+            // Remove gradient classes
+            Array.from(btn.classList).forEach(cls => {
+                if (cls.includes('bg-gradient') || cls.includes('from-sky') || cls.includes('to-blue') || cls.includes('hover:from') || cls.includes('hover:to') || cls.includes('shadow-sky')) {
+                    btn.classList.remove(cls);
+                }
+            });
+            // Add normal button styling
+            if (!btn.classList.contains('bg-theme-600')) {
+                btn.classList.add('bg-theme-600');
+            }
+        });
+    }
+
+    function getCardPrice(card) {
+        const priceElement = card.querySelector('span.text-3xl.font-bold.text-theme-100, span.text-2xl.font-bold.text-theme-100, span.text-2xl.font-bold.tracking-tight.text-theme-100');
+        if (!priceElement) return Infinity;
+        const priceText = priceElement.textContent.trim();
+        const priceValue = parseFloat(priceText.replace(/[^0-9.]/g, ''));
+        return isNaN(priceValue) ? Infinity : priceValue;
+    }
+
+    function getCardRating(card) {
+        // Count filled stars for rating
+        const filledStars = Array.from(card.querySelectorAll('.iconify[class*="star-solid"]')).length;
+        return filledStars;
+    }
+
+    function getCardStock(card) {
+        const stockText = Array.from(card.querySelectorAll('span')).find(el => el.textContent.includes('stock'))?.textContent || '';
+        const stockValue = parseInt(stockText.match(/\d+/)?.[0] || 0);
+        return stockValue;
+    }
+
+    function getSortingOption() {
+        // Find the sorting dropdown and extract the selected option
+        const sortingSpan = document.querySelector('span.truncate.text-theme-100');
+        if (!sortingSpan) return 'Recommended';
+        const text = sortingSpan.textContent.trim();
+        return text;
+    }
+
+    function sortCards(cards, sortOption) {
+        const sortedCards = [...cards];
+
+        switch(sortOption) {
+            case 'Price: Low to High':
+                sortedCards.sort((a, b) => getCardPrice(a) - getCardPrice(b));
+                break;
+            case 'Price: High to Low':
+                sortedCards.sort((a, b) => getCardPrice(b) - getCardPrice(a));
+                break;
+            case 'Rating: High to Low':
+                sortedCards.sort((a, b) => getCardRating(b) - getCardRating(a));
+                break;
+            case 'Rating: Low to High':
+                sortedCards.sort((a, b) => getCardRating(a) - getCardRating(b));
+                break;
+            case 'Stock: High to Low':
+                sortedCards.sort((a, b) => getCardStock(b) - getCardStock(a));
+                break;
+            case 'Stock: Low to High':
+                sortedCards.sort((a, b) => getCardStock(a) - getCardStock(b));
+                break;
+            case 'Recommended':
+            case 'Recently Updated':
+            case 'Oldest Updated':
+            default:
+                return cards; // Don't sort, maintain original order
+        }
+
+        return sortedCards;
+    }
+
+    function mergeAndSortSponsored() {
+        const settings = getSettings();
+        if (!settings.mergeSponsoredMarkets) return;
+
+        // Find the offers section (the div with space-y-4 that contains marketplace cards)
+        const offersSection = document.querySelector('section#offers');
+        if (!offersSection) return;
+
+        const container = offersSection.querySelector('div.space-y-4');
+        if (!container) return;
+
+        const sortOption = getSortingOption();
+        if (sortOption === 'Recommended') return; // Don't alter if Recommended
+
+        // Get all marketplace cards
+        const allCards = Array.from(container.querySelectorAll('article.group.relative'));
+        if (allCards.length === 0) return;
+
+        // Normalize sponsored cards
+        allCards.forEach(card => normalizeSponsored(card));
+
+        // Sort cards
+        const sortedCards = sortCards(allCards, sortOption);
+
+        // Re-insert in correct order
+        sortedCards.forEach(card => {
+            container.appendChild(card);
+        });
     }
 
     function autoExpandOffers() {
@@ -96,12 +225,14 @@
         expandNextButton();
     }
 
-    function toggleFavorite(card) {
+    function toggleFavorite(card, starIcon) {
         const settings = getSettings();
         if (!settings.multiFavorite) return;
 
         const marketplaceName = card.querySelector('a.font-semibold')?.textContent.trim() || card.querySelector('img')?.alt;
-        const starIcon = card.querySelector('.iconify[class*="star"]');
+        if (!starIcon) {
+            starIcon = card.querySelector('.iconify[class*="star"]');
+        }
 
         if (!marketplaceName || !starIcon || !pinnedMarketplacesGrid) return;
 
@@ -529,6 +660,16 @@
                             <div class="pmf-toggle-knob"></div>
                         </button>
                     </div>
+
+                    <div class="pmf-feature-item">
+                        <div class="pmf-feature-label">
+                            <span class="pmf-feature-name">Merge Sponsored</span>
+                            <span class="pmf-feature-desc">Sort ads with regular offers</span>
+                        </div>
+                        <button class="pmf-toggle ${settings.mergeSponsoredMarkets ? 'active' : ''}" data-feature="mergeSponsoredMarkets">
+                            <div class="pmf-toggle-knob"></div>
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -568,6 +709,10 @@
                     } else {
                         // Remove favorites when feature is disabled
                         removeFavoritesOnDisable();
+                    }
+                } else if (feature === 'mergeSponsoredMarkets') {
+                    if (settings.mergeSponsoredMarkets) {
+                        mergeAndSortSponsored();
                     }
                 }
 
@@ -654,7 +799,7 @@
                         const destinationGrid = marketplaceSections[card.dataset.originalSection] || marketplaceSections['Other Marketplaces'];
                         if (destinationGrid) {
                             destinationGrid.appendChild(card);
-                            const starIcon = card.querySelector('.iconify[class*="star"]');
+                            const starIcon = getFavoriteStarIcon(card);
                             updateStarIcon(starIcon, false);
                         }
                     } else {
@@ -663,7 +808,7 @@
                             favorites.push(marketplaceName);
                             favoritesUpdated = true;
                         }
-                        const starIcon = card.querySelector('.iconify[class*="star"]');
+                        const starIcon = getFavoriteStarIcon(card);
                         updateStarIcon(starIcon, true);
                     }
                 });
@@ -684,7 +829,7 @@
                     });
                     pinnedMarketplacesGrid.insertBefore(card, insertBeforeNode || null);
 
-                    const starIcon = card.querySelector('.iconify[class*="star"]');
+                    const starIcon = getFavoriteStarIcon(card);
                     updateStarIcon(starIcon, true);
                 }
              });
@@ -720,7 +865,7 @@
                             });
                             destinationGrid.insertBefore(card, insertBeforeNode || null);
 
-                            const starIcon = card.querySelector('.iconify[class*="star"]');
+                            const starIcon = getFavoriteStarIcon(card);
                             updateStarIcon(starIcon, false);
                         }
                     }
@@ -743,6 +888,7 @@
         if (marketplaceGrid && marketplaceGrid.children.length > 0) {
             initializeSections();
             applyFavoritesOnLoad();
+            mergeAndSortSponsored();
             obs.disconnect(); // done with setup, the click listener will handle everything else
         }
     });
@@ -753,6 +899,16 @@
         subtree: true
     });
 
+    // Monitor sorting dropdown changes
+    let lastSortingOption = getSortingOption();
+    setInterval(() => {
+        const currentSorting = getSortingOption();
+        if (currentSorting !== lastSortingOption && currentSorting !== 'Recommended') {
+            lastSortingOption = currentSorting;
+            mergeAndSortSponsored();
+        }
+    }, 500);
+
     // Handle view toggle buttons (list/grid)
     document.body.addEventListener('click', function(event) {
         // Check if clicked button contains list-bullet or squares-2x2 icon (view toggle buttons)
@@ -761,6 +917,21 @@
             clickedBtn.querySelector('[class*="list-bullet"]') ||
             clickedBtn.querySelector('[class*="squares-2x2"]')
         );
+
+        // Check if this is a sorting dropdown click (has multiple sort options visible)
+        const sortingDropdownBtn = event.target.closest('div.flex.w-full.cursor-pointer.select-none.items-center');
+        const isSortingClick = sortingDropdownBtn !== null;
+
+        if (isSortingClick) {
+            // Sorting option might change, so re-sort after dropdown closes
+            setTimeout(() => {
+                const currentSorting = getSortingOption();
+                if (currentSorting !== lastSortingOption) {
+                    lastSortingOption = currentSorting;
+                    mergeAndSortSponsored();
+                }
+            }, 300);
+        }
 
         if (isViewToggleBtn) {
             // View was toggled, reinitialize after DOM updates
@@ -776,6 +947,7 @@
                 if (marketplaceGrid && marketplaceGrid.children.length > 0) {
                     initializeSections();
                     applyFavoritesOnLoad();
+                    mergeAndSortSponsored();
                 }
                 autoExpandOffers();
             }, 500); // Wait for Vue to update the DOM
@@ -790,7 +962,7 @@
             if(isActionableStar){
                 event.preventDefault();
                 event.stopPropagation();
-                toggleFavorite(card);
+                toggleFavorite(card, starIcon);
             }
         }
     }, true);
