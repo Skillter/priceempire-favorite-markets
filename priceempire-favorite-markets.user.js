@@ -932,7 +932,7 @@
                 } else {
                     console.log('[Pricempire] Initial load NOT in List view, skipping merge/sort');
                 }
-            }, 300);
+            }, 50);
             obs.disconnect(); // done with setup, the click listener will handle everything else
         }
     });
@@ -961,7 +961,7 @@
             if (isCurrentlyListView()) {
                 mergeAndSortSponsored();
             }
-        }, 300);
+        }, 100);
     });
 
     // Observe changes to the offers section for filter updates
@@ -1002,7 +1002,7 @@
 
         if (isListViewBtn) {
             // Switching to List view - apply merge/sort
-            console.log('[Pricempire] isListViewBtn is TRUE, queuing setTimeout for 500ms...');
+            console.log('[Pricempire] isListViewBtn is TRUE, queuing setTimeout for 200ms...');
             setTimeout(() => {
                 console.log('[Pricempire] Inside List view setTimeout callback');
                 // Completely clear cached sections
@@ -1023,12 +1023,12 @@
                         const sortOpt = getSortingOption();
                         console.log('[Pricempire] Switched to List view - detected sorting option:', sortOpt);
                         mergeAndSortSponsored();
-                    }, 300);
+                    }, 50);
                 } else {
                     console.log('[Pricempire] Marketplace cards not ready yet, skipping initialization');
                 }
                 autoExpandOffers();
-            }, 500); // Wait for Vue to update the DOM
+            }, 200); // Wait for Vue to update the DOM
         } else if (isGridViewBtn) {
             // Switching to Grid view - only reinitialize, don't apply merge/sort
             setTimeout(() => {
@@ -1045,7 +1045,7 @@
                     applyFavoritesOnLoad();
                 }
                 autoExpandOffers();
-            }, 500); // Wait for Vue to update the DOM
+            }, 200); // Wait for Vue to update the DOM
         }
 
         // Handle favorite star clicks
