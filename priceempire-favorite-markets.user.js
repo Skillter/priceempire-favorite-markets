@@ -197,7 +197,13 @@
                     </div>
                     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" data-v-cd0f6ace=""></div>
                 `;
-                mainContainer.prepend(newPinnedSection);
+                // Insert after first section to maintain correct order (after Featured Deals, etc)
+                const firstSection = mainContainer.querySelector('.space-y-4');
+                if (firstSection) {
+                    firstSection.insertAdjacentElement('afterend', newPinnedSection);
+                } else {
+                    mainContainer.prepend(newPinnedSection);
+                }
                 pinnedMarketplacesGrid = newPinnedSection.querySelector('.grid');
                 marketplaceSections['Pinned Marketplaces'] = pinnedMarketplacesGrid;
             }
@@ -747,10 +753,37 @@
         subtree: true
     });
 
+    // Handle view toggle buttons (list/grid)
     document.body.addEventListener('click', function(event) {
+        // Check if clicked button contains list-bullet or squares-2x2 icon (view toggle buttons)
+        const clickedBtn = event.target.closest('button');
+        const isViewToggleBtn = clickedBtn && (
+            clickedBtn.querySelector('[class*="list-bullet"]') ||
+            clickedBtn.querySelector('[class*="squares-2x2"]')
+        );
+
+        if (isViewToggleBtn) {
+            // View was toggled, reinitialize after DOM updates
+            setTimeout(() => {
+                // Completely clear cached sections
+                for (let key in marketplaceSections) {
+                    delete marketplaceSections[key];
+                }
+                pinnedMarketplacesGrid = null;
+
+                // Reinitialize sections (will find the new server-side pinned section or create one)
+                const marketplaceGrid = document.querySelector('.grid[data-v-cd0f6ace]');
+                if (marketplaceGrid && marketplaceGrid.children.length > 0) {
+                    initializeSections();
+                    applyFavoritesOnLoad();
+                }
+                autoExpandOffers();
+            }, 500); // Wait for Vue to update the DOM
+        }
+
+        // Handle favorite star clicks
         const starIcon = event.target.closest('.iconify[class*="star"]');
         const card = starIcon?.closest('.group.relative');
-
 
         if (starIcon && card) {
             const isActionableStar = starIcon.classList.contains('i-material-symbols-light:kid-star-outline') || starIcon.classList.contains('i-material-symbols-light:family-star-sharp');
