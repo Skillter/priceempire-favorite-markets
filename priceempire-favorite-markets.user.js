@@ -82,15 +82,15 @@
             const showMoreBtns = document.querySelectorAll('button[aria-label="Show more offers"]');
             if (showMoreBtns.length === 0) return; // No more buttons
 
-            // Find first unclicked button
-            for (let btn of showMoreBtns) {
-                if (!btn.dataset.pmfClicked) {
-                    btn.dataset.pmfClicked = 'true';
-                    btn.click();
-                    setTimeout(expandNextButton, 800); // Wait for content to load, then check for next button
-                    return;
-                }
-            }
+            // Click the first button and recurse
+            const btn = showMoreBtns[0];
+            const clickEvent = new MouseEvent('click', {
+                bubbles: true,
+                cancelable: true,
+                view: window
+            });
+            btn.dispatchEvent(clickEvent);
+            setTimeout(expandNextButton, 800); // Wait for content to load, then check for next button
         };
 
         expandNextButton();
@@ -552,6 +552,19 @@
                 toggle.classList.toggle('active');
                 saveSettings(settings);
 
+                // Handle feature-specific actions
+                if (feature === 'autoExpandOffers' && settings.autoExpandOffers) {
+                    autoExpandOffers();
+                } else if (feature === 'multiFavorite') {
+                    if (settings.multiFavorite) {
+                        // Re-apply favorites when feature is enabled
+                        applyFavoritesOnLoad();
+                    } else {
+                        // Remove favorites when feature is disabled
+                        removeFavoritesOnDisable();
+                    }
+                }
+
                 // Show notification
                 notification.classList.remove('show');
                 clearTimeout(notificationTimeout);
@@ -610,6 +623,8 @@
 
     // this moves favorited items to the pinned section on initial load
     function applyFavoritesOnLoad() {
+        const settings = getSettings();
+        if (!settings.multiFavorite) return;
         if (!pinnedMarketplacesGrid) return;
         let favorites = getFavorites();
         const serverUnfavorited = getServerUnfavorited();
@@ -674,18 +689,54 @@
         }
     }
 
+    // Remove all locally favorited items from pinned section
+    function removeFavoritesOnDisable() {
+        if (!pinnedMarketplacesGrid) return;
+        let favorites = getFavorites();
+
+        Object.entries(marketplaceSections).forEach(([title, grid]) => {
+            if (title === 'Pinned Marketplaces') {
+                // Move client-favorited items (not server-favorited) back to their original sections
+                Array.from(grid.children).forEach(card => {
+                    const isServerFavorited = card.dataset.serverFavorited === 'true';
+                    if (!isServerFavorited) {
+                        const marketplaceName = card.querySelector('a.font-semibold')?.textContent.trim() || card.querySelector('img')?.alt;
+                        const originalSectionTitle = card.dataset.originalSection;
+                        const destinationGrid = marketplaceSections[originalSectionTitle] || marketplaceSections['Other Marketplaces'];
+
+                        if (destinationGrid && marketplaceName && favorites.includes(marketplaceName)) {
+                            // Insert in price order (cheapest first)
+                            const cardPrice = getPriceFromCard(card);
+                            const siblings = Array.from(destinationGrid.children);
+                            const insertBeforeNode = siblings.find(sibling => {
+                                const siblingPrice = getPriceFromCard(sibling);
+                                return siblingPrice > cardPrice;
+                            });
+                            destinationGrid.insertBefore(card, insertBeforeNode || null);
+
+                            const starIcon = card.querySelector('.iconify[class*="star"]');
+                            updateStarIcon(starIcon, false);
+                        }
+                    }
+                });
+            }
+        });
+    }
+
     // Main Execution is heeeeere
 
     // Initialize settings UI
     createSettingsUI();
 
+    // Auto-expand offers (doesn't require marketplace grid)
+    autoExpandOffers();
+
     // wait for the marketplace container to be populated with MutationObserver
-    const observer = new MutationObserver((mutations, obs) => {
+    const observer = new MutationObserver((_mutations, obs) => {
         const marketplaceGrid = document.querySelector('.grid[data-v-cd0f6ace]');
         if (marketplaceGrid && marketplaceGrid.children.length > 0) {
             initializeSections();
             applyFavoritesOnLoad();
-            autoExpandOffers();
             obs.disconnect(); // done with setup, the click listener will handle everything else
         }
     });
