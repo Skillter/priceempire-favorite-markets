@@ -114,7 +114,8 @@
     }
 
     function getCardPrice(card) {
-        const priceElement = card.querySelector('span.text-3xl.font-bold.text-theme-100, span.text-2xl.font-bold.text-theme-100, span.text-2xl.font-bold.tracking-tight.text-theme-100');
+        // Look for price span - matches text-3xl/text-2xl with font-bold, ignoring color variations
+        const priceElement = card.querySelector('span.text-3xl.font-bold, span.text-2xl.font-bold');
         if (!priceElement) return Infinity;
         const priceText = priceElement.textContent.trim();
         const priceValue = parseFloat(priceText.replace(/[^0-9.]/g, ''));
@@ -122,9 +123,11 @@
     }
 
     function getCardRating(card) {
-        // Count filled stars for rating
-        const filledStars = Array.from(card.querySelectorAll('.iconify[class*="star-solid"]')).length;
-        return filledStars;
+        // Extract rating from the numeric value span (e.g., "4.7")
+        const ratingSpan = card.querySelector('span.ml-1.font-medium');
+        if (!ratingSpan) return 0;
+        const ratingValue = parseFloat(ratingSpan.textContent.trim());
+        return isNaN(ratingValue) ? 0 : ratingValue;
     }
 
     function getCardStock(card) {
@@ -134,11 +137,26 @@
     }
 
     function getSortingOption() {
-        // Find the sorting dropdown and extract the selected option
-        const sortingSpan = document.querySelector('span.truncate.text-theme-100');
-        if (!sortingSpan) return 'Recommended';
-        const text = sortingSpan.textContent.trim();
-        return text;
+        // Find the sorting dropdown within the offers section context
+        const offersSection = document.querySelector('section#offers');
+        if (!offersSection) return 'Recommended';
+
+        // Look for all spans with truncate and text-theme-100 in the offers section
+        const spans = Array.from(offersSection.querySelectorAll('span.truncate.text-theme-100'));
+
+        // The sorting span should be near the top of the section, typically the first or second one
+        // Filter to find ones that match known sorting options
+        const sortingOptions = ['Price: Low to High', 'Price: High to Low', 'Rating: High to Low', 'Rating: Low to High',
+                               'Stock: High to Low', 'Stock: Low to High', 'Recommended', 'Recently Updated', 'Oldest Updated'];
+
+        for (const span of spans) {
+            const text = span.textContent.trim();
+            if (sortingOptions.includes(text)) {
+                return text;
+            }
+        }
+
+        return 'Recommended';
     }
 
     function sortCards(cards, sortOption) {
@@ -167,7 +185,8 @@
             case 'Recently Updated':
             case 'Oldest Updated':
             default:
-                return cards; // Don't sort, maintain original order
+                // For options without clear sort criteria, keep current order
+                break;
         }
 
         return sortedCards;
@@ -177,30 +196,34 @@
         const settings = getSettings();
         if (!settings.mergeSponsoredMarkets) return;
 
-        // Find the offers section (the div with space-y-4 that contains marketplace cards)
-        const offersSection = document.querySelector('section#offers');
-        if (!offersSection) return;
-
-        const container = offersSection.querySelector('div.space-y-4');
-        if (!container) return;
-
         const sortOption = getSortingOption();
-        if (sortOption === 'Recommended') return; // Don't alter if Recommended
 
-        // Get all marketplace cards
-        const allCards = Array.from(container.querySelectorAll('article.group.relative'));
+        // Skip re-insertion only for "Recommended" (don't alter server order)
+        if (sortOption === 'Recommended') return;
+
+        // Find all marketplace cards on the page
+        const allCards = Array.from(document.querySelectorAll('article.group.relative'));
         if (allCards.length === 0) return;
 
-        // Normalize sponsored cards
+        // Always normalize sponsored cards (remove bias styling)
         allCards.forEach(card => normalizeSponsored(card));
 
-        // Sort cards
+        // Apply custom sort logic for Price/Rating/Stock
+        // For Recently Updated/Oldest Updated, sortCards returns cards in current order (no sort applied)
         const sortedCards = sortCards(allCards, sortOption);
 
-        // Re-insert in correct order
-        sortedCards.forEach(card => {
-            container.appendChild(card);
-        });
+        // Re-insert all cards to mix sponsored with regular markets
+        if (sortedCards.length > 0) {
+            const container = sortedCards[0].parentElement;
+            if (container) {
+                // Use a document fragment to avoid cycling issues
+                const fragment = document.createDocumentFragment();
+                sortedCards.forEach(card => {
+                    fragment.appendChild(card);
+                });
+                container.appendChild(fragment);
+            }
+        }
     }
 
     function autoExpandOffers() {
@@ -882,13 +905,34 @@
     // Auto-expand offers (doesn't require marketplace grid)
     autoExpandOffers();
 
+    // Check if currently in List view
+    function isCurrentlyListView() {
+        const allViewBtns = Array.from(document.querySelectorAll('button'));
+        const listBtn = allViewBtns.find(btn => btn.querySelector('[class*="list-bullet"]'));
+        const isListView = listBtn && listBtn.classList.contains('bg-theme-700');
+        console.log('[Pricempire] isCurrentlyListView:', isListView, 'listBtn:', listBtn?.className);
+        return isListView;
+    }
+
     // wait for the marketplace container to be populated with MutationObserver
     const observer = new MutationObserver((_mutations, obs) => {
-        const marketplaceGrid = document.querySelector('.grid[data-v-cd0f6ace]');
-        if (marketplaceGrid && marketplaceGrid.children.length > 0) {
+        // Check for marketplace cards in either Grid or List view
+        const marketplaceCards = document.querySelectorAll('article.group.relative');
+        if (marketplaceCards.length > 0) {
+            console.log('[Pricempire] MutationObserver triggered - found', marketplaceCards.length, 'marketplace cards');
             initializeSections();
             applyFavoritesOnLoad();
-            mergeAndSortSponsored();
+            // Delay sorting to ensure sorting option is fully rendered (only if in List view)
+            setTimeout(() => {
+                console.log('[Pricempire] Checking view on initial load...');
+                if (isCurrentlyListView()) {
+                    const sortOpt = getSortingOption();
+                    console.log('[Pricempire] Initial load in List view - detected sorting option:', sortOpt);
+                    mergeAndSortSponsored();
+                } else {
+                    console.log('[Pricempire] Initial load NOT in List view, skipping merge/sort');
+                }
+            }, 300);
             obs.disconnect(); // done with setup, the click listener will handle everything else
         }
     });
@@ -899,7 +943,7 @@
         subtree: true
     });
 
-    // Monitor sorting dropdown changes
+    // Monitor sorting dropdown changes and filter changes
     let lastSortingOption = getSortingOption();
     setInterval(() => {
         const currentSorting = getSortingOption();
@@ -909,14 +953,37 @@
         }
     }, 500);
 
+    // Monitor filter changes (payment method, etc.)
+    const filterObserver = new MutationObserver((_mutations, obs) => {
+        // When filters change, the marketplace cards list might update
+        // Re-apply merge/sort after a short delay
+        setTimeout(() => {
+            if (isCurrentlyListView()) {
+                mergeAndSortSponsored();
+            }
+        }, 300);
+    });
+
+    // Observe changes to the offers section for filter updates
+    const offersSection = document.querySelector('section#offers');
+    if (offersSection) {
+        filterObserver.observe(offersSection, {
+            childList: true,
+            subtree: true
+        });
+    }
+
     // Handle view toggle buttons (list/grid)
     document.body.addEventListener('click', function(event) {
         // Check if clicked button contains list-bullet or squares-2x2 icon (view toggle buttons)
         const clickedBtn = event.target.closest('button');
-        const isViewToggleBtn = clickedBtn && (
-            clickedBtn.querySelector('[class*="list-bullet"]') ||
-            clickedBtn.querySelector('[class*="squares-2x2"]')
-        );
+        const isListViewBtn = clickedBtn && clickedBtn.querySelector('[class*="list-bullet"]');
+        const isGridViewBtn = clickedBtn && clickedBtn.querySelector('[class*="squares-2x2"]');
+        const isViewToggleBtn = isListViewBtn || isGridViewBtn;
+
+        if (isViewToggleBtn) {
+            console.log('[Pricempire] View button clicked - isListViewBtn:', !!isListViewBtn, 'isGridViewBtn:', !!isGridViewBtn);
+        }
 
         // Check if this is a sorting dropdown click (has multiple sort options visible)
         const sortingDropdownBtn = event.target.closest('div.flex.w-full.cursor-pointer.select-none.items-center');
@@ -933,8 +1000,37 @@
             }, 300);
         }
 
-        if (isViewToggleBtn) {
-            // View was toggled, reinitialize after DOM updates
+        if (isListViewBtn) {
+            // Switching to List view - apply merge/sort
+            console.log('[Pricempire] isListViewBtn is TRUE, queuing setTimeout for 500ms...');
+            setTimeout(() => {
+                console.log('[Pricempire] Inside List view setTimeout callback');
+                // Completely clear cached sections
+                for (let key in marketplaceSections) {
+                    delete marketplaceSections[key];
+                }
+                pinnedMarketplacesGrid = null;
+
+                // In List view, look for marketplace cards directly
+                const marketplaceCards = document.querySelectorAll('article.group.relative');
+                console.log('[Pricempire] Found marketplace cards:', marketplaceCards.length);
+                if (marketplaceCards.length > 0) {
+                    console.log('[Pricempire] Marketplace cards ready, applying merge/sort...');
+                    initializeSections();
+                    applyFavoritesOnLoad();
+                    // Delay sorting to ensure sorting option is fully rendered after view change
+                    setTimeout(() => {
+                        const sortOpt = getSortingOption();
+                        console.log('[Pricempire] Switched to List view - detected sorting option:', sortOpt);
+                        mergeAndSortSponsored();
+                    }, 300);
+                } else {
+                    console.log('[Pricempire] Marketplace cards not ready yet, skipping initialization');
+                }
+                autoExpandOffers();
+            }, 500); // Wait for Vue to update the DOM
+        } else if (isGridViewBtn) {
+            // Switching to Grid view - only reinitialize, don't apply merge/sort
             setTimeout(() => {
                 // Completely clear cached sections
                 for (let key in marketplaceSections) {
@@ -942,12 +1038,11 @@
                 }
                 pinnedMarketplacesGrid = null;
 
-                // Reinitialize sections (will find the new server-side pinned section or create one)
+                // Reinitialize sections
                 const marketplaceGrid = document.querySelector('.grid[data-v-cd0f6ace]');
                 if (marketplaceGrid && marketplaceGrid.children.length > 0) {
                     initializeSections();
                     applyFavoritesOnLoad();
-                    mergeAndSortSponsored();
                 }
                 autoExpandOffers();
             }, 500); // Wait for Vue to update the DOM
