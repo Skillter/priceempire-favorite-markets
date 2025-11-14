@@ -751,53 +751,98 @@
     }
 
     async function findSteamPriceData() {
+        console.log('\n=== STEAM PRICE EXTRACTION START ===');
+        console.log('[Pricempire] Initial state:');
+        console.log('  - window.steamBuyOrderPrice:', window.steamBuyOrderPrice);
+        console.log('  - Current URL:', window.location.href);
+        console.log('  - Timestamp:', new Date().toISOString());
+
         debugLog('Searching for Steam price data...');
 
+        let finalResult = null;
+        let resultSource = '';
+
         // Method 1: Extract Steam Buy Order from orange-bordered section
+        console.log('\nMETHOD 1: Extracting Steam Buy Order from DOM section...');
         debugLog('Method 1: Extracting Steam Buy Order from DOM section...');
         const buyOrderData = extractSteamBuyOrderPrice();
         if (buyOrderData && buyOrderData.buyOrderPrice > 0) {
             debugLog('Found Steam Buy Order price:', buyOrderData.buyOrderPrice);
+            console.log('SUCCESS - Method 1 extracted buy order:', buyOrderData.buyOrderPrice);
             console.log('[Pricempire] STEAM BUY ORDER SOURCE: Method 1 - Steam Buy Order section, buy order price:', buyOrderData.buyOrderPrice);
-            // Don't return yet - we still need the sell order price from marketplace cards or API
+            // Store buy order price globally immediately
+            window.steamBuyOrderPrice = buyOrderData.buyOrderPrice;
+            console.log('[Pricempire] Stored buy order price globally:', window.steamBuyOrderPrice);
         } else {
+            console.log('FAILED - Method 1: No Steam Buy Order section found or no valid buy order price extracted');
             debugLog('No Steam Buy Order section found or no valid buy order price extracted');
         }
 
         // Method 2: Extract Steam price from Steam marketplace card (sell price)
+        console.log('\nMETHOD 2: Searching Steam marketplace card for sell price...');
         debugLog('Method 2: Searching Steam marketplace card for sell price...');
         const steamMarketplaceCard = findSteamMarketplaceCard();
         if (steamMarketplaceCard) {
+            console.log('Found Steam marketplace card - extracting prices...');
             const priceData = extractPriceFromCard(steamMarketplaceCard);
             if (priceData && priceData.mainPrice > 0) {
+                console.log('SUCCESS - Method 2 extracted sell price:', priceData.mainPrice, 'buy order:', priceData.buyOrderPrice);
                 debugLog('Found Steam marketplace card sell price:', priceData.mainPrice, 'method: DOM extraction');
-                // Store buy order price globally for use in replacement
-                window.steamBuyOrderPrice = priceData.buyOrderPrice;
+                // IMPORTANT: Don't overwrite buy order price if we already have it from Method 1
+                if (!window.steamBuyOrderPrice && priceData.buyOrderPrice) {
+                    window.steamBuyOrderPrice = priceData.buyOrderPrice;
+                    console.log('[Pricempire] Set buy order price from Steam card (Method 2):', window.steamBuyOrderPrice);
+                } else if (window.steamBuyOrderPrice) {
+                    console.log('[Pricempire] Preserved buy order price from Method 1:', window.steamBuyOrderPrice);
+                }
+                finalResult = priceData.mainPrice.toString();
+                resultSource = 'Method 2 - Steam marketplace card (DOM)';
                 console.log('[Pricempire] STEAM PRICE SOURCE: Method 2 - Steam marketplace card, sell price:', priceData.mainPrice);
-                return priceData.mainPrice.toString();
             } else {
+                console.log('FAILED - Steam marketplace card found but no valid price data extracted');
                 debugLog('Steam marketplace card found but no valid price data extracted');
             }
         } else {
+            console.log('FAILED - No Steam marketplace card found in DOM');
             debugLog('No Steam marketplace card found in DOM');
         }
 
         // Method 3: Steam Community Market API with 1-hour caching (final fallback)
-        debugLog('Method 3: Trying Steam Community Market API with cache...');
-        try {
-            const steamMarketPrice = await fetchSteamPriceFromSteamAPI();
-            if (steamMarketPrice) {
-                console.log('[Pricempire] STEAM PRICE SOURCE: Method 3 - Steam Community Market API, price:', steamMarketPrice);
-                return steamMarketPrice;
-            } else {
-                debugLog('Method 3: Steam API returned null/undefined');
+        if (!finalResult) {
+            console.log('\n📋 METHOD 3: Trying Steam Community Market API with cache...');
+            debugLog('Method 3: Trying Steam Community Market API with cache...');
+            try {
+                const steamMarketPrice = await fetchSteamPriceFromSteamAPI();
+                if (steamMarketPrice) {
+                    console.log('✅ SUCCESS - Method 3 extracted API price:', steamMarketPrice);
+                    finalResult = steamMarketPrice;
+                    resultSource = 'Method 3 - Steam Community Market API (fallback)';
+                    console.log('[Pricempire] STEAM PRICE SOURCE: Method 3 - Steam Community Market API, price:', steamMarketPrice);
+                } else {
+                    console.log('❌ FAILED - Method 3: Steam API returned null/undefined');
+                    debugLog('Method 3: Steam API returned null/undefined');
+                }
+            } catch (steamApiError) {
+                console.log('❌ FAILED - Method 3: Steam API call failed with error:', steamApiError.message);
+                debugLog('Method 3: Steam API call failed with error:', steamApiError.message);
             }
-        } catch (steamApiError) {
-            debugLog('Method 3: Steam API call failed with error:', steamApiError.message);
         }
 
-        console.log('[Pricempire] No Steam price data found from any of the 3 methods');
-        return null;
+        // Final summary and return
+        console.log('\n🏁 === STEAM PRICE EXTRACTION SUMMARY ===');
+        console.log('📊 Final result:', finalResult);
+        console.log('📍 Source:', resultSource);
+        console.log('💰 Buy order price:', window.steamBuyOrderPrice);
+        console.log('⏰ Timestamp:', new Date().toISOString());
+
+        if (finalResult) {
+            console.log('✅ SUCCESS - Returning Steam price:', finalResult);
+            return finalResult;
+        } else {
+            console.log('❌ FAILED - No Steam price data found from any method');
+            console.log('[Pricempire] No Steam price data found from any of the 3 methods');
+            return null;
+        }
     }
 
     // Alternative function to extract Steam price from visible/cached data
@@ -1053,9 +1098,24 @@
         // STRICT: Only look for official Steam marketplace card with exact aria-label
         const steamCard = document.querySelector('article[aria-label="Offer from Steam"]');
         if (steamCard) {
-            console.log('[Pricempire] Found official Steam marketplace card via aria-label');
-            console.log('[Pricempire] Steam card marketplace name:', steamCard.querySelector('p.font-bold')?.textContent?.trim());
-            return steamCard;
+            const marketplaceName = steamCard.querySelector('p.font-bold')?.textContent?.trim() ||
+                                   steamCard.querySelector('a[href*="/cs2-marketplaces/steam"] p')?.textContent?.trim();
+            const hasSteamIcon = steamCard.querySelector('img[src*="steam_icon.webp"], img[alt="Steam"]');
+
+            console.log('[Pricempire] Found candidate Steam card:', {
+                marketplaceName: `"${marketplaceName}"`,
+                hasSteamIcon: !!hasSteamIcon,
+                isRealSteam: marketplaceName === 'Steam' && hasSteamIcon
+            });
+
+            // CRITICAL: Only return if it's actually a real Steam marketplace card
+            if (marketplaceName === 'Steam' && hasSteamIcon) {
+                console.log('[Pricempire] ✅ Returning real Steam marketplace card');
+                return steamCard;
+            } else {
+                console.log('[Pricempire] ❌ REJECTED - Fake Steam card with marketplace:', marketplaceName);
+                return null;
+            }
         }
         return null;
     }
@@ -1156,11 +1216,23 @@
 
         // IMPORTANT: Don't overwrite buy order price from Steam cards - they only have sell prices
         // Buy order prices should only come from the orange DOM section, not Steam marketplace cards
-        if (buyOrderPrice && !card.getAttribute('aria-label')?.includes('Offer from Steam')) {
+        const isSteamCard = card.getAttribute('aria-label')?.includes('Offer from Steam');
+
+        console.log('\n🔍 === BUY ORDER PRICE HANDLING ===');
+        console.log('[Pricempire] 📊 Buy Order Price Analysis:');
+        console.log('  - Extracted buy order price:', buyOrderPrice);
+        console.log('  - Is Steam card:', isSteamCard);
+        console.log('  - Current global buy order price:', window.steamBuyOrderPrice);
+        console.log('  - Card aria-label:', card.getAttribute('aria-label'));
+
+        if (buyOrderPrice && !isSteamCard) {
             window.steamBuyOrderPrice = buyOrderPrice.toFixed(2);
-            console.log('[Pricempire] Stored global steam buy order price from non-Steam card:', window.steamBuyOrderPrice);
-        } else if (buyOrderPrice && card.getAttribute('aria-label')?.includes('Offer from Steam')) {
-            console.log('[Pricempire] Ignoring buy order price from Steam card (should only use orange section):', buyOrderPrice);
+            console.log('✅ STORED - Global buy order price from non-Steam card:', window.steamBuyOrderPrice);
+        } else if (buyOrderPrice && isSteamCard) {
+            console.log('🛡️ PROTECTED - Ignoring buy order price from Steam card to preserve orange section value:', buyOrderPrice);
+            console.log('📦 Global buy order price remains:', window.steamBuyOrderPrice);
+        } else {
+            console.log('ℹ️ INFO - No buy order price to handle');
         }
 
         if (mainPrice) {
@@ -1192,12 +1264,17 @@
 
     // Helper function to extract item name from page
     function getItemName() {
+        console.log('[Pricempire] getItemName: Extracting item name from multiple sources...');
+
         // Method 1: From Steam market link (most reliable)
         const steamLink = document.querySelector('a[href*="steamcommunity.com/market/listings/730/"]');
         if (steamLink) {
             const href = steamLink.getAttribute('href');
+            console.log('[Pricempire] Found Steam link:', href);
             const marketName = href.split('/730/')[1];
-            const extractedName = marketName.replace(/[^a-zA-Z0-9\s]/g, ' ').trim();
+            // DECODE the URL to get exact Steam market name (including case and special chars)
+            const extractedName = decodeURIComponent(marketName).trim();
+            console.log('[Pricempire] Extracted from Steam link (decoded):', `"${extractedName}"`);
             debugLog('getItemName: Extracted from Steam link:', extractedName);
             return extractedName;
         }
@@ -1206,6 +1283,7 @@
         const breadcrumb = document.querySelector('nav[aria-label="Breadcrumb"] li:last-child a');
         if (breadcrumb) {
             const breadcrumbName = breadcrumb.getAttribute('href').split('/').pop().replace(/-/g, ' ');
+            console.log('[Pricempire] Extracted from breadcrumb:', breadcrumbName);
             debugLog('getItemName: Extracted from breadcrumb:', breadcrumbName);
             return breadcrumbName;
         }
@@ -1217,11 +1295,13 @@
             if (parts.length >= 5) {
                 // Extract item name from URL: /cs2-items/category/item-name/variation
                 const urlName = parts[parts.length - 2].replace(/-/g, ' ');
+                console.log('[Pricempire] Extracted from URL:', urlName);
                 debugLog('getItemName: Extracted from URL:', urlName);
                 return urlName;
             }
         }
 
+        console.log('[Pricempire] getItemName: No item name found');
         debugLog('getItemName: No item name found');
         return null;
     }
@@ -1675,7 +1755,13 @@
 
             // Steam Community Market API URL
             // CS2 items typically use appid 730
-            const steamMarketUrl = `https://steamcommunity.com/market/priceoverview/?appid=730&currency=1&market_hash_name=${encodeURIComponent(itemName)}`;
+            const encodedItemName = encodeURIComponent(itemName);
+            const steamMarketUrl = `https://steamcommunity.com/market/priceoverview/?appid=730&currency=1&market_hash_name=${encodedItemName}`;
+
+            console.log('[Pricempire] DEBUG - Steam API Request Details:');
+            console.log('  - Original itemName:', `"${itemName}"`);
+            console.log('  - Encoded itemName:', `"${encodedItemName}"`);
+            console.log('  - Full API URL:', steamMarketUrl);
 
             // Use GM_xmlhttpRequest to bypass CORS restrictions
             return new Promise((resolve) => {
@@ -1707,6 +1793,10 @@
                             try {
                                 const data = JSON.parse(response.responseText);
                                 console.log('[Pricempire] Steam Community Market API parsed data:', data);
+                                console.log('[Pricempire] API response fields:', Object.keys(data));
+                                console.log('[Pricempire] lowest_price exists:', !!data.lowest_price, 'value:', data.lowest_price);
+                                console.log('[Pricempire] median_price exists:', !!data.median_price, 'value:', data.median_price);
+                                console.log('[Pricempire] volume exists:', !!data.volume, 'value:', data.volume);
 
                                 // Extract price from Steam API response
                                 let steamPrice = null;
@@ -1724,7 +1814,8 @@
                                         console.log('[Pricempire] Found Steam median_price:', steamPrice, 'from text:', data.median_price);
                                     }
                                 } else {
-                                    console.log('[Pricempire] No price data found in Steam API response');
+                                    console.log('[Pricempire] WARNING: API returned success=true but no price fields available');
+                                    console.log('[Pricempire] Item may not be available on Steam Community Market');
                                 }
 
                                 if (steamPrice && steamPrice > 0) {
@@ -1812,45 +1903,53 @@
                     }
 
                     if (isSteamCard) {
+                        console.log('\n=== STEAM CARD MONITORING DETECTION ===');
+                        console.log('[Pricempire] STEAM CARD FOUND - Validating...');
+
                         // Additional validation: ensure this is actually a real Steam marketplace card
                         const marketplaceName = card.querySelector('p.font-bold')?.textContent?.trim() ||
                                              card.querySelector('a[href*="/cs2-marketplaces/steam"] p')?.textContent?.trim();
                         const hasSteamIcon = card.querySelector('img[src*="steam_icon.webp"], img[alt="Steam"]');
                         const hasSteamCube = card.querySelector('.iconify.i-heroicons\\:cube.text-green-500');
 
-                        console.log('[Pricempire] Steam card validation for card with aria-label="Offer from Steam":', {
+                        const isRealSteam = marketplaceName === 'Steam' && hasSteamIcon;
+
+                        console.log('[Pricempire] 🔍 Steam card validation details:', {
                             marketplaceName: `"${marketplaceName}"`,
                             hasSteamIcon: !!hasSteamIcon,
                             hasSteamCube: !!hasSteamCube,
-                            isRealSteam: marketplaceName === 'Steam' && hasSteamIcon,
+                            isRealSteam: isRealSteam,
+                            currentGlobalBuyOrderPrice: window.steamBuyOrderPrice,
                             cardHTML: card.innerHTML.substring(0, 200)
                         });
 
-                        // Only process if this is actually a real Steam marketplace card
-                        if (marketplaceName === 'Steam' && hasSteamIcon) {
-                            newSteamCards.push(card);
-                            card.dataset.steamProcessed = 'true'; // Mark as processed
-
-                            console.log('[Pricempire] VALID Steam card detected:', {
-                                ariaLabel: card.getAttribute('aria-label'),
-                                textSample: card.textContent.substring(0, 200),
-                                priceText: card.textContent.match(/\$[\d.,]+/g),
-                                fullHTML: card.innerHTML.substring(0, 500),
-                                marketplaceName: card.querySelector('a.font-semibold')?.textContent?.trim()
-                            });
-                        } else {
-                            console.log('[Pricempire] REJECTED: Card has Steam aria-label but fails real Steam validation:', {
-                                marketplaceName,
-                                hasSteamIcon: !!hasSteamIcon,
-                                hasSteamCube: !!hasSteamCube
-                            });
+                        // STRICT: Only process if this is actually a real Steam marketplace card
+                        // CRITICAL: REJECT any card with marketplaceName !== "Steam" even if aria-label is correct
+                        if (!isRealSteam) {
+                            console.log('REJECTED - Not a real Steam card - marketplace is:', marketplaceName);
+                            return; // Skip this card entirely in forEach callback
                         }
+
+                        console.log('VALIDATION PASSED - This is a real Steam card');
+                        newSteamCards.push(card);
+                        card.dataset.steamProcessed = 'true'; // Mark as processed
+
+                        console.log('[Pricempire] VALID Steam card detected:', {
+                            ariaLabel: card.getAttribute('aria-label'),
+                            textSample: card.textContent.substring(0, 200),
+                            priceText: card.textContent.match(/\$[\d.,]+/g),
+                            fullHTML: card.innerHTML.substring(0, 500),
+                            marketplaceName: marketplaceName
+                        });
                     }
                 });
 
                 // Process any newly found Steam cards
                 if (newSteamCards.length > 0) {
-                    console.log(`[Pricempire] Processing ${newSteamCards.length} new Steam cards...`);
+                    console.log('\n🚨 === STEAM CARD PROCESSING START ===');
+                    console.log(`[Pricempire] ⚠️ PROCESSING ${newSteamCards.length} new Steam cards...`);
+                    console.log('[Pricempire] ⚠️ BEFORE PROCESSING - Global buy order price:', window.steamBuyOrderPrice);
+
                     console.log('[Pricempire] DEBUG: Cards that passed validation:', newSteamCards.map(card => ({
                         ariaLabel: card.getAttribute('aria-label'),
                         marketplaceName: card.querySelector('a.font-semibold')?.textContent?.trim(),
@@ -1940,8 +2039,17 @@
                         debugLog('SUCCESS - Selected best Steam price from monitoring:', bestSteamPrice, 'from', bestPriceSource);
                         console.log('[Pricempire] STEAM PRICE SELECTED: Monitoring detection, price:', bestSteamPrice, 'source:', bestPriceSource);
 
+                        console.log('\n⚠️ === MONITORING UPDATE TRIGGERED ===');
+                        console.log('[Pricempire] 🚨 ABOUT TO CALL updateMarketOverviewPrice');
+                        console.log('  - bestSteamPrice (sell):', bestSteamPrice);
+                        console.log('  - current global buy order price:', window.steamBuyOrderPrice);
+                        console.log('  - bestPriceSource:', bestPriceSource);
+                        console.log('  - This may overwrite existing prices!');
+
                         // Update the current page's Steam price display immediately with the best price found
                         updateMarketOverviewPrice(bestSteamPrice);
+
+                        console.log('[Pricempire] ✅ Monitoring update completed');
 
                         // 3rd APPROACH: Try to get exact Steam price directly via API as backup
                         console.log('[Pricempire] ALSO trying direct Steam API call for comparison...');
@@ -1989,12 +2097,18 @@
     }
 
     function replaceWithSteamPrice(priceCard, steamPrice) {
-        console.log('[Pricempire] FORCE DEBUG: replaceWithSteamPrice called with:', steamPrice);
-        console.log('[Pricempire] FORCE DEBUG: window.steamBuyOrderPrice:', window.steamBuyOrderPrice);
-        console.log('[Pricempire] FORCE DEBUG: priceCard exists:', !!priceCard);
+        console.log('\n🎨 === UI UPDATE: replaceWithSteamPrice ===');
+        console.log('[Pricempire] 🔄 UI Update Started');
+        console.log('  - Steam price (sell):', steamPrice);
+        console.log('  - Buy order price (global):', window.steamBuyOrderPrice);
+        console.log('  - Price card exists:', !!priceCard);
+        console.log('  - Current marketplace:', priceCard.getAttribute('aria-label'));
+        console.log('  - Call stack trace:', new Error().stack?.split('\n')[1]?.trim());
 
         if (!priceCard || !steamPrice) {
-            console.log('[Pricempire] FORCE DEBUG: Early return - priceCard:', !!priceCard, 'steamPrice:', !!steamPrice);
+            console.log('❌ EARLY RETURN - Missing required data');
+            console.log('  - priceCard:', !!priceCard);
+            console.log('  - steamPrice:', !!steamPrice);
             return;
         }
 
@@ -2287,9 +2401,16 @@
     }
 
     async function updateMarketOverviewPrice(overrideSteamPrice = null) {
+        console.log('\n🔄 === MARKET OVERVIEW PRICE UPDATE ===');
+        console.log('[Pricempire] 🔄 updateMarketOverviewPrice called');
+        console.log('  - overrideSteamPrice:', overrideSteamPrice);
+        console.log('  - Current global buy order price:', window.steamBuyOrderPrice);
+        console.log('  - Call stack:', new Error().stack?.split('\n')[1]?.trim());
+
         const settings = getSettings();
 
         if (!settings.useSteamPricePreview) {
+            console.log('[Pricempire] ❌ Steam price preview is disabled in settings');
             return false;
         }
 
