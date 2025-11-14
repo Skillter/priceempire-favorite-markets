@@ -112,26 +112,88 @@
     }
 
     function isSponsored(card) {
-        const bgDiv = card.querySelector('.bg-theme-700.ring-1.ring-theme-800');
-        return bgDiv !== null;
+        // Check if already marked as sponsored (persistent tracking)
+        if (card.dataset.isSponsored === 'true') {
+            return true;
+        }
+
+        // Grid view sponsored detection
+        const gridSponsored = card.querySelector('.bg-theme-700.ring-1.ring-theme-800');
+        if (gridSponsored) return true;
+
+        // List view sponsored detection - different styling patterns
+        const listSponsoredPatterns = [
+            '.border-l-4.border-yellow-500', // List view sponsored border
+            '.ring-yellow-500', // Yellow ring indicator
+            '[class*="sponsored"]', // Any class containing "sponsored"
+            '[class*="ad"]', // Any class containing "ad"
+            '.bg-yellow-50\\/50', // Light yellow background
+            '.border-l-yellow-500' // Left border indicator
+        ];
+
+        for (const selector of listSponsoredPatterns) {
+            if (card.querySelector(selector)) {
+                return true;
+            }
+        }
+
+        // Text-based detection for sponsored indicators
+        const sponsoredTexts = ['sponsored', 'ad', 'promoted'];
+        const cardText = card.textContent.toLowerCase();
+        return sponsoredTexts.some(text => cardText.includes(text));
     }
 
     function normalizeSponsored(card) {
+        // Skip if already normalized
+        if (card.dataset.isNormalized === 'true') return;
+
         if (!isSponsored(card)) return;
         card.dataset.isSponsored = 'true';
+        card.dataset.isNormalized = 'true';
 
-        const bgDiv = card.querySelector('.bg-theme-700.ring-1.ring-theme-800');
-        if (bgDiv) {
-            bgDiv.classList.remove('bg-theme-700', 'ring-1', 'ring-theme-800');
-            bgDiv.classList.add('bg-theme-800');
+        // Grid view sponsored normalization
+        const gridBgDiv = card.querySelector('.bg-theme-700.ring-1.ring-theme-800');
+        if (gridBgDiv) {
+            gridBgDiv.classList.remove('bg-theme-700', 'ring-1', 'ring-theme-800');
+            gridBgDiv.classList.add('bg-theme-800');
         }
 
+        // List view sponsored normalization
+        const listSponsoredElements = [
+            '.border-l-4.border-yellow-500',
+            '.ring-yellow-500',
+            '.border-l-yellow-500',
+            '.bg-yellow-50\\/50'
+        ];
+
+        listSponsoredElements.forEach(selector => {
+            const element = card.querySelector(selector);
+            if (element) {
+                // Remove yellow/sponsored indicators
+                element.classList.remove('border-yellow-500', 'ring-yellow-500', 'bg-yellow-50/50');
+                // Replace with neutral styling
+                if (selector.includes('border-l-4')) {
+                    element.classList.add('border-l-4', 'border-theme-700');
+                } else if (selector.includes('ring')) {
+                    element.classList.add('ring-theme-800');
+                }
+            }
+        });
+
+        // Remove any sponsored/ad text indicators
+        const sponsoredTextElements = card.querySelectorAll('[class*="sponsored"], [class*="ad"], [class*="promoted"]');
+        sponsoredTextElements.forEach(element => {
+            element.style.display = 'none';
+        });
+
         // Normalize button styling from gradient to theme color
-        const buttons = card.querySelectorAll('[class*="bg-gradient-to-r"]');
+        const buttons = card.querySelectorAll('[class*="bg-gradient-to-r"], [class*="from-sky"], [class*="to-blue"]');
         buttons.forEach(btn => {
-            // Remove gradient classes
+            // Remove gradient and sky-themed classes
             Array.from(btn.classList).forEach(cls => {
-                if (cls.includes('bg-gradient') || cls.includes('from-sky') || cls.includes('to-blue') || cls.includes('hover:from') || cls.includes('hover:to') || cls.includes('shadow-sky')) {
+                if (cls.includes('bg-gradient') || cls.includes('from-sky') || cls.includes('to-blue') ||
+                    cls.includes('hover:from') || cls.includes('hover:to') || cls.includes('shadow-sky') ||
+                    cls.includes('shadow-blue')) {
                     btn.classList.remove(cls);
                 }
             });
@@ -249,17 +311,24 @@
         // Check if we need to sort (either sort option changed or card count changed)
         const needsSorting = sortOption !== lastSortOption || currentCardCount !== lastCardCount;
 
+        // Always ensure sponsored cards are normalized, even if no sorting needed
+        allCards.forEach(card => normalizeSponsored(card));
+
         if (!needsSorting) {
-            // Still normalize sponsored cards even if no sorting needed
-            allCards.forEach(card => normalizeSponsored(card));
+            return;
+        }
+
+        // Additional DOM readiness check for filter updates
+        if (!isDOMReadyForNormalization()) {
+            // Retry after a short delay if DOM isn't ready
+            setTimeout(() => mergeAndSortSponsored(), 200);
             return;
         }
 
         isCurrentlySorting = true;
 
         try {
-            // Always normalize sponsored cards (remove bias styling)
-            allCards.forEach(card => normalizeSponsored(card));
+            // Sponsored cards are already normalized above
 
             // Apply custom sort logic for Price/Rating/Stock
             // For Recently Updated/Oldest Updated, sortCards returns cards in current order (no sort applied)
@@ -2021,30 +2090,98 @@
         }
     }, 2000); // Further reduced to minimize interference
 
-    // Monitor filter changes (payment method, etc.) - with debouncing
+    // Get adaptive debounce delay based on view mode
+    function getAdaptiveDelay() {
+        return isCurrentlyListView() ? 750 : 400; // Longer delay for List view
+    }
+
+    // Check if DOM is ready for sponsored normalization
+    function isDOMReadyForNormalization() {
+        const cards = document.querySelectorAll('article.group.relative');
+        return cards.length > 0 && Array.from(cards).every(card => card.querySelector('span.font-semibold'));
+    }
+
+    // Smart cache management - only clear when necessary
+    function shouldClearCache(sortOption) {
+        return sortOption !== lastSortOption;
+    }
+
+    // Monitor filter changes (payment method, etc.) - targeted and adaptive
     let filterTimeout = null;
-    const filterObserver = new MutationObserver((_mutations, obs) => {
+
+    // Monitor specific filter dropdowns for more precise detection
+    function monitorFilterDropdowns() {
+        const paymentMethodDropdown = document.querySelector('[data-testid="payment-method"], select[name*="payment"], select[id*="payment"]');
+        const filterDropdowns = document.querySelectorAll('select[id*="filter"], [data-testid*="filter"]');
+
+        const dropdownsToMonitor = paymentMethodDropdown ? [paymentMethodDropdown, ...filterDropdowns] : filterDropdowns;
+
+        dropdownsToMonitor.forEach(dropdown => {
+            if (dropdown) {
+                dropdown.addEventListener('change', () => {
+                    handleFilterChange();
+                });
+            }
+        });
+    }
+
+    function handleFilterChange() {
         // Clear any existing timeout
         if (filterTimeout) {
             clearTimeout(filterTimeout);
         }
 
-        // When filters change, the marketplace cards list might update
-        // Re-apply merge/sort after a longer delay with debouncing
+        const adaptiveDelay = getAdaptiveDelay();
+
+        // Apply changes with adaptive timing
         filterTimeout = setTimeout(() => {
-            // Clear cache to allow re-sorting with new filter results
-            lastSortOption = null;
-            lastCardCount = 0;
+            // Wait for DOM to be ready
+            if (!isDOMReadyForNormalization()) {
+                // If not ready, wait longer and try again
+                setTimeout(handleFilterChange, 200);
+                return;
+            }
+
+            const sortOption = getSortingOption();
+            const shouldClear = shouldClearCache(sortOption);
+
+            if (shouldClear) {
+                // Only clear cache when sort option actually changed
+                lastSortOption = null;
+                lastCardCount = 0;
+            }
+
             mergeAndSortSponsored();
-        }, 500); // Further increased debounce delay
+        }, adaptiveDelay);
+    }
+
+    // Fallback MutationObserver with targeted scope
+    const filterObserver = new MutationObserver((_mutations, obs) => {
+        // Filter mutations to only relevant changes
+        const relevantMutations = _mutations.filter(mutation => {
+            // Only process mutations that affect card elements or their direct parents
+            return Array.from(mutation.addedNodes).some(node => {
+                return node.nodeType === Node.ELEMENT_NODE && (
+                    node.matches?.('article.group.relative') ||
+                    node.querySelector?.('article.group.relative')
+                );
+            });
+        });
+
+        if (relevantMutations.length > 0) {
+            handleFilterChange();
+        }
     });
 
-    // Observe changes to the offers section for filter updates
+    // Initialize targeted filter monitoring
+    monitorFilterDropdowns();
+
+    // Observe changes to the offers section with targeted scope
     const offersSection = document.querySelector('section#offers');
     if (offersSection) {
         filterObserver.observe(offersSection, {
             childList: true,
-            subtree: true
+            subtree: false // Only watch direct children to reduce noise
         });
     }
 
