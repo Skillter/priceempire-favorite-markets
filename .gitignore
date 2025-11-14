@@ -4,3 +4,4 @@ copy.bat
 /node_modules
 *example*.html
 *priceempire*.html
+*.har
