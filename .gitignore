@@ -1,5 +1,6 @@
-favorite-page-example.html
 codebase-txt/merged_codebase.txt
 copy-codebase-and-change-extension.ps1
 copy.bat
 /node_modules
+*example*.html
+*priceempire*.html
