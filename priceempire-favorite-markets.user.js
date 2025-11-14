@@ -98,16 +98,29 @@
 
     function updateStarIcon(starIcon, isFavorite) {
         if (!starIcon) return;
+
         const isUnfavoritedIcon = starIcon.classList.contains('i-material-symbols-light:kid-star-outline');
+        const isFavoritedIcon = starIcon.classList.contains('i-material-symbols-light:family-star-sharp') ||
+                               starIcon.classList.contains('i-heroicons:star-solid');
+
+        console.log('[Pricempire] updateStarIcon called - isFavorite:', isFavorite, 'isUnfavoritedIcon:', isUnfavoritedIcon, 'isFavoritedIcon:', isFavoritedIcon, 'current classes:', starIcon.className);
 
         if (isFavorite && isUnfavoritedIcon) {
-            starIcon.classList.replace('i-material-symbols-light:kid-star-outline', 'i-material-symbols-light:family-star-sharp');
+            // Change from outline to filled star - use working icon name
+            starIcon.classList.remove('i-material-symbols-light:kid-star-outline');
+            starIcon.classList.add('i-heroicons:star-solid');
             starIcon.classList.remove('text-theme-400');
-            starIcon.classList.add('text-yellow-500');
-        } else if (!isFavorite && !isUnfavoritedIcon) {
-            starIcon.classList.replace('i-material-symbols-light:family-star-sharp', 'i-material-symbols-light:kid-star-outline');
-            starIcon.classList.remove('text-yellow-500');
+            starIcon.classList.add('text-yellow-400'); // Match existing filled star color
+            console.log('[Pricempire] Changed to favorited star - new classes:', starIcon.className);
+        } else if (!isFavorite && isFavoritedIcon) {
+            // Change from filled to outline star
+            starIcon.classList.remove('i-heroicons:star-solid', 'i-material-symbols-light:family-star-sharp');
+            starIcon.classList.add('i-material-symbols-light:kid-star-outline');
+            starIcon.classList.remove('text-yellow-400', 'text-yellow-500');
             starIcon.classList.add('text-theme-400');
+            console.log('[Pricempire] Changed to unfavorited star - new classes:', starIcon.className);
+        } else {
+            console.log('[Pricempire] No star update needed - current state matches desired state');
         }
     }
 
@@ -117,18 +130,35 @@
             return true;
         }
 
-        // Grid view sponsored detection
-        const gridSponsored = card.querySelector('.bg-theme-700.ring-1.ring-theme-800');
-        if (gridSponsored) return true;
+        // PRIMARY DETECTION: Check for data-is-sponsored attribute (most reliable)
+        if (card.getAttribute('data-is-sponsored') === 'true') {
+            debugLog('Sponsored detected via data-is-sponsored attribute');
+            return true;
+        }
 
-        // List view sponsored detection - different styling patterns
+        // Enhanced Grid view sponsored detection - check multiple patterns
+        const gridSponsoredPatterns = [
+            '.bg-theme-700.ring-1.ring-theme-800', // Primary Grid view pattern
+            '.bg-gradient-to-r.from-sky-500.to-blue-600', // Gradient button pattern
+            '.ring-1.ring-yellow-500', // Yellow ring variant
+            '.border.border-yellow-400\\/50' // Yellow border variant
+        ];
+
+        for (const selector of gridSponsoredPatterns) {
+            if (card.querySelector(selector)) {
+                return true;
+            }
+        }
+
+        // Enhanced List view sponsored detection - comprehensive patterns
         const listSponsoredPatterns = [
             '.border-l-4.border-yellow-500', // List view sponsored border
             '.ring-yellow-500', // Yellow ring indicator
-            '[class*="sponsored"]', // Any class containing "sponsored"
-            '[class*="ad"]', // Any class containing "ad"
-            '.bg-yellow-50\\/50', // Light yellow background
-            '.border-l-yellow-500' // Left border indicator
+            '.sponsored-marker', '.ad-marker', '.promoted-marker', // Specific markers
+            '.bg-yellow-50\\/50', '.bg-yellow-100\\/50', // Light yellow backgrounds
+            '.border-l-yellow-500', '.border-yellow-500', // Yellow borders
+            '[data-sponsored]', '[data-ad]', '[data-promoted]', // Data attributes
+            '.text-yellow-600', '.text-yellow-700' // Yellow text indicators
         ];
 
         for (const selector of listSponsoredPatterns) {
@@ -137,68 +167,143 @@
             }
         }
 
-        // Text-based detection for sponsored indicators
-        const sponsoredTexts = ['sponsored', 'ad', 'promoted'];
-        const cardText = card.textContent.toLowerCase();
-        return sponsoredTexts.some(text => cardText.includes(text));
+        // Check for sponsored buttons with gradient styling
+        const sponsoredButtons = card.querySelectorAll('button[class*="from-sky"], button[class*="to-blue"], button[class*="bg-gradient"]');
+        if (sponsoredButtons.length > 0) {
+            return true;
+        }
+
+        // More specific text-based detection for sponsored indicators
+        // Look for explicit sponsored text in various elements
+        const textSelectors = ['.badge', '.text-xs', '.text-sm', '.text-xs', '.tag', '[class*="indicator"]'];
+        for (const selector of textSelectors) {
+            const elements = card.querySelectorAll(selector);
+            for (const element of elements) {
+                const text = element.textContent.toLowerCase().trim();
+                if (text === 'sponsored' || text === 'ad' || text === 'promoted' || text === 'sponsored ad') {
+                    return true;
+                }
+            }
+        }
+
+        // Check card attributes for sponsored indicators
+        const cardClasses = card.className || '';
+        const cardAriaLabel = card.getAttribute('aria-label') || '';
+        const cardDataAttributes = JSON.stringify({
+            sponsored: card.dataset.sponsored,
+            ad: card.dataset.ad,
+            promoted: card.dataset.promoted
+        });
+
+        const searchableText = (cardClasses + ' ' + cardAriaLabel + ' ' + cardDataAttributes).toLowerCase();
+        return searchableText.includes('sponsored') || searchableText.includes('promoted');
     }
 
     function normalizeSponsored(card) {
         // Skip if already normalized
         if (card.dataset.isNormalized === 'true') return;
 
-        if (!isSponsored(card)) return;
+        const isSponsoredCard = isSponsored(card);
+
+        // Debug logging for troubleshooting
+        if (getSettings().debugMode) {
+            debugLog('normalizeSponsored called on card:', isSponsoredCard);
+        }
+
+        if (!isSponsoredCard) return;
         card.dataset.isSponsored = 'true';
         card.dataset.isNormalized = 'true';
 
-        // Grid view sponsored normalization
-        const gridBgDiv = card.querySelector('.bg-theme-700.ring-1.ring-theme-800');
-        if (gridBgDiv) {
-            gridBgDiv.classList.remove('bg-theme-700', 'ring-1', 'ring-theme-800');
-            gridBgDiv.classList.add('bg-theme-800');
-        }
+        // Enhanced Grid view sponsored normalization - handle multiple patterns
+        const gridSponsoredElements = [
+            '.bg-theme-700.ring-1.ring-theme-800',
+            '.ring-1.ring-yellow-500',
+            '.border.border-yellow-400\\/50'
+        ];
 
-        // List view sponsored normalization
+        gridSponsoredElements.forEach(selector => {
+            const element = card.querySelector(selector);
+            if (element) {
+                // Remove sponsored-specific styling
+                element.classList.remove('bg-theme-700', 'ring-1', 'ring-theme-800',
+                                         'ring-yellow-500', 'border-yellow-400/50');
+                // Add neutral styling
+                if (!element.classList.contains('bg-theme-800')) {
+                    element.classList.add('bg-theme-800');
+                }
+            }
+        });
+
+        // Enhanced List view sponsored normalization
         const listSponsoredElements = [
             '.border-l-4.border-yellow-500',
             '.ring-yellow-500',
             '.border-l-yellow-500',
-            '.bg-yellow-50\\/50'
+            '.border-yellow-500',
+            '.bg-yellow-50\\/50',
+            '.bg-yellow-100\\/50',
+            '.text-yellow-600',
+            '.text-yellow-700'
         ];
 
         listSponsoredElements.forEach(selector => {
-            const element = card.querySelector(selector);
-            if (element) {
+            const elements = card.querySelectorAll(selector);
+            elements.forEach(element => {
                 // Remove yellow/sponsored indicators
-                element.classList.remove('border-yellow-500', 'ring-yellow-500', 'bg-yellow-50/50');
+                const yellowClasses = ['border-yellow-500', 'ring-yellow-500', 'bg-yellow-50/50',
+                                     'bg-yellow-100/50', 'text-yellow-600', 'text-yellow-700'];
+
+                yellowClasses.forEach(cls => {
+                    if (element.classList.contains(cls)) {
+                        element.classList.remove(cls);
+                    }
+                });
+
                 // Replace with neutral styling
                 if (selector.includes('border-l-4')) {
                     element.classList.add('border-l-4', 'border-theme-700');
                 } else if (selector.includes('ring')) {
                     element.classList.add('ring-theme-800');
+                } else if (selector.includes('text-')) {
+                    element.classList.add('text-theme-100');
                 }
-            }
+            });
         });
 
-        // Remove any sponsored/ad text indicators
-        const sponsoredTextElements = card.querySelectorAll('[class*="sponsored"], [class*="ad"], [class*="promoted"]');
-        sponsoredTextElements.forEach(element => {
-            element.style.display = 'none';
+        // Remove specific sponsored/ad text indicators - be very specific to avoid breaking legitimate content
+        const sponsoredTextSelectors = [
+            '.sponsored-badge', '.ad-badge', '.promoted-badge',
+            '[data-sponsored="true"]', '[data-ad="true"]',
+            '.text-sponsored', '.text-ad', '.text-promoted',
+            'span.sponsored', 'span.ad', 'span.promoted'
+        ];
+
+        sponsoredTextSelectors.forEach(selector => {
+            const elements = card.querySelectorAll(selector);
+            elements.forEach(element => {
+                element.style.display = 'none';
+            });
         });
 
-        // Normalize button styling from gradient to theme color
-        const buttons = card.querySelectorAll('[class*="bg-gradient-to-r"], [class*="from-sky"], [class*="to-blue"]');
+        // Normalize button styling from gradient to theme color - be more specific to avoid breaking icons
+        const buttons = card.querySelectorAll('[class*="bg-gradient-to-r"], [class*="from-sky-500"], [class*="from-sky-600"], [class*="to-blue-500"], [class*="to-blue-600"]');
         buttons.forEach(btn => {
-            // Remove gradient and sky-themed classes
-            Array.from(btn.classList).forEach(cls => {
-                if (cls.includes('bg-gradient') || cls.includes('from-sky') || cls.includes('to-blue') ||
-                    cls.includes('hover:from') || cls.includes('hover:to') || cls.includes('shadow-sky') ||
-                    cls.includes('shadow-blue')) {
+            // Only remove specific gradient classes that indicate sponsored styling
+            const gradientClasses = [
+                'bg-gradient-to-r',
+                'from-sky-500', 'from-sky-600',
+                'to-blue-500', 'to-blue-600',
+                'hover:from-sky-600', 'hover:to-blue-600'
+            ];
+
+            gradientClasses.forEach(cls => {
+                if (btn.classList.contains(cls)) {
                     btn.classList.remove(cls);
                 }
             });
-            // Add normal button styling
-            if (!btn.classList.contains('bg-theme-600')) {
+
+            // Add normal button styling only if it doesn't already have proper styling
+            if (!btn.classList.contains('bg-theme-600') && !btn.classList.contains('bg-theme-700')) {
                 btn.classList.add('bg-theme-600');
             }
         });
@@ -421,11 +526,12 @@
 
         const marketplaceName = card.querySelector('a.font-semibold')?.textContent.trim() || card.querySelector('img')?.alt;
         if (!starIcon) {
-            debugLog('Star icon not provided, searching within card...');
+            console.log('[Pricempire] Star icon not provided, searching within card...');
             starIcon = getFavoriteStarIcon(card);
         }
 
-        debugLog('toggleFavorite called - marketplaceName:', marketplaceName, 'starIcon:', !!starIcon, 'pinnedMarketplacesGrid:', !!pinnedMarketplacesGrid);
+        console.log('[Pricempire] toggleFavorite called - marketplaceName:', marketplaceName, 'starIcon:', !!starIcon, 'pinnedMarketplacesGrid:', !!pinnedMarketplacesGrid);
+        console.log('[Pricempire] Card dataset:', card.dataset);
 
         if (!marketplaceName || !starIcon || !pinnedMarketplacesGrid) {
             console.warn('[Pricempire] toggleFavorite failed - marketplaceName:', !!marketplaceName, 'starIcon:', !!starIcon, 'pinnedMarketplacesGrid:', !!pinnedMarketplacesGrid);
@@ -437,7 +543,10 @@
         const isFavorite = favorites.includes(marketplaceName);
         const isServerFavorited = card.dataset.serverFavorited === 'true';
 
+        console.log('[Pricempire] Current state - isFavorite:', isFavorite, 'isServerFavorited:', isServerFavorited, 'favorites list:', favorites);
+
         if (isFavorite) {
+            console.log('[Pricempire] Unfavoriting marketplace:', marketplaceName);
             // unfavorite
             favorites = favorites.filter(fav => fav !== marketplaceName);
 
@@ -448,6 +557,7 @@
             }
 
             const originalSectionTitle = card.dataset.originalSection;
+            console.log('[Pricempire] Moving card back to original section:', originalSectionTitle);
             const destinationGrid = marketplaceSections[originalSectionTitle] || marketplaceSections['Other Marketplaces'];
 
             if (destinationGrid) {
@@ -459,10 +569,14 @@
                     return siblingPrice > cardPrice;
                 });
                 destinationGrid.insertBefore(card, insertBeforeNode || null);
+                console.log('[Pricempire] Card moved back to original section successfully');
 
             } else {
                 console.warn(`[Pricempire Multi-Favorite] Could not find original section "${originalSectionTitle}" or fallback "Other Marketplaces" to return card to.`);
+                console.log('[Pricempire] Available sections:', Object.keys(marketplaceSections));
             }
+
+            console.log('[Pricempire] Updating star icon to unfavorited state');
             updateStarIcon(starIcon, false);
 
         } else {
@@ -487,10 +601,14 @@
                 return siblingPrice > cardPrice;
             });
             pinnedMarketplacesGrid.insertBefore(card, insertBeforeNode || null);
+            console.log('[Pricempire] Card moved to pinned section successfully');
 
             updateStarIcon(starIcon, true);
+            console.log('[Pricempire] Star icon updated to favorited state');
         }
         saveFavorites(favorites);
+        console.log('[Pricempire] Favorites saved:', favorites);
+        console.log('[Pricempire] toggleFavorite completed successfully');
     }
 
 // creates or finds the pinned Marketplaces section and caches all section grids.
@@ -2111,6 +2229,7 @@
 
     // Monitor specific filter dropdowns for more precise detection
     function monitorFilterDropdowns() {
+        // Standard HTML selects for payment methods
         const paymentMethodDropdown = document.querySelector('[data-testid="payment-method"], select[name*="payment"], select[id*="payment"]');
         const filterDropdowns = document.querySelectorAll('select[id*="filter"], [data-testid*="filter"]');
 
@@ -2119,10 +2238,51 @@
         dropdownsToMonitor.forEach(dropdown => {
             if (dropdown) {
                 dropdown.addEventListener('change', () => {
+                    debugLog('Standard dropdown change detected');
                     handleFilterChange();
                 });
             }
         });
+
+        // Monitor custom dropdown options (.select-option elements)
+        const customDropdownOptions = document.querySelectorAll('.select-option');
+        customDropdownOptions.forEach(option => {
+            // Remove existing listeners to avoid duplicates
+            option.removeEventListener('click', handleCustomOptionClick);
+            option.addEventListener('click', handleCustomOptionClick);
+        });
+
+        // Also monitor for dynamically added dropdown options
+        const dropdownObserver = new MutationObserver((_mutations) => {
+            const newOptions = document.querySelectorAll('.select-option:not([data-monitored])');
+            newOptions.forEach(option => {
+                option.setAttribute('data-monitored', 'true');
+                option.addEventListener('click', handleCustomOptionClick);
+            });
+        });
+
+        // Observe the entire document for new dropdown options
+        dropdownObserver.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+    }
+
+    // Handle custom dropdown option clicks
+    function handleCustomOptionClick(event) {
+        const option = event.currentTarget;
+        if (option.classList.contains('select-option')) {
+            debugLog('Custom dropdown option clicked');
+
+            // Check if this option relates to payment methods by its content or context
+            const optionText = option.textContent.toLowerCase();
+            const paymentKeywords = ['payment', 'paypal', 'stripe', 'card', 'wallet', 'crypto', 'bitcoin', 'ethereum', 'bank'];
+
+            if (paymentKeywords.some(keyword => optionText.includes(keyword))) {
+                debugLog('Payment method change detected via custom dropdown');
+                handleFilterChange();
+            }
+        }
     }
 
     function handleFilterChange() {
@@ -2142,6 +2302,20 @@
                 return;
             }
 
+            // Force re-normalization of ALL cards after filter changes
+            // This ensures newly loaded sponsored cards are properly processed
+            const allCards = document.querySelectorAll('article.group.relative');
+            debugLog('Filter change detected - re-normalizing', allCards.length, 'cards');
+
+            // Clear normalization markers to force re-processing
+            allCards.forEach(card => {
+                delete card.dataset.isNormalized;
+                // But preserve sponsored detection if it existed
+                if (card.dataset.isSponsored === 'true') {
+                    // Keep the sponsored marker but allow re-normalization
+                }
+            });
+
             const sortOption = getSortingOption();
             const shouldClear = shouldClearCache(sortOption);
 
@@ -2152,6 +2326,41 @@
             }
 
             mergeAndSortSponsored();
+
+            // Multi-tier retry normalization system
+            // Tier 1: Fast retry (300ms) - for quickly loading content
+            setTimeout(() => {
+                const delayedCards = document.querySelectorAll('article.group.relative');
+                delayedCards.forEach(card => {
+                    if (!card.dataset.isNormalized) {
+                        normalizeSponsored(card);
+                    }
+                });
+                debugLog('Tier 1 retry completed - normalized', delayedCards.length, 'cards');
+            }, 300);
+
+            // Tier 2: Medium retry (1000ms) - for slower loading content
+            setTimeout(() => {
+                const mediumCards = document.querySelectorAll('article.group.relative');
+                mediumCards.forEach(card => {
+                    if (!card.dataset.isNormalized) {
+                        normalizeSponsored(card);
+                    }
+                });
+                debugLog('Tier 2 retry completed - normalized', mediumCards.length, 'cards');
+            }, 1000);
+
+            // Tier 3: Final retry (2000ms) - for very slow content
+            setTimeout(() => {
+                const finalCards = document.querySelectorAll('article.group.relative');
+                finalCards.forEach(card => {
+                    if (!card.dataset.isNormalized) {
+                        normalizeSponsored(card);
+                    }
+                });
+                debugLog('Tier 3 retry completed - normalized', finalCards.length, 'cards');
+            }, 2000);
+
         }, adaptiveDelay);
     }
 
@@ -2283,11 +2492,13 @@
         }
 
         if (starIcon && card) {
-            // More flexible star detection - check for any material-symbols-light star classes
+            // More flexible star detection - check for any star icon classes
             const isActionableStar = starIcon.classList.contains('i-material-symbols-light:kid-star-outline') ||
                                    starIcon.classList.contains('i-material-symbols-light:family-star-sharp') ||
+                                   starIcon.classList.contains('i-heroicons:star-solid') ||
                                    starIcon.className.includes('kid-star') ||
-                                   starIcon.className.includes('family-star');
+                                   starIcon.className.includes('family-star') ||
+                                   starIcon.className.includes('star-solid');
 
             console.log('[Pricempire] isActionableStar:', isActionableStar);
 
@@ -2302,7 +2513,7 @@
         }
     }, true);
 
-    // Prevent text selection issues by ensuring user-select is not interfered with
+    // Prevent text selection issues and add persistent sponsored styling
     const style = document.createElement('style');
     style.textContent = `
         /* Ensure text selection works properly on marketplace cards */
@@ -2327,7 +2538,146 @@
         article.group.relative [class*="hover:"] {
             pointer-events: auto !important;
         }
+
+        /* === PERSISTENT SPONSORED NORMALIZATION CSS === */
+        /* These rules automatically override sponsored styling regardless of DOM replacement */
+
+        /* Override sponsored Grid view styling */
+        article[data-is-sponsored="true"] .bg-theme-700.ring-1.ring-theme-800 {
+            background-color: rgb(30 41 59) !important; /* bg-theme-800 */
+            background: rgb(30 41 59) !important;
+        }
+
+        /* Override sponsored List view yellow borders and rings */
+        article[data-is-sponsored="true"] .border-l-4.border-yellow-500 {
+            border-color: rgb(55 65 81) !important; /* border-theme-700 */
+        }
+
+        article[data-is-sponsored="true"] .ring-yellow-500 {
+            --tw-ring-color: rgb(30 41 59) !important; /* ring-theme-800 */
+        }
+
+        article[data-is-sponsored="true"] .border-yellow-500 {
+            border-color: rgb(55 65 81) !important; /* border-theme-700 */
+        }
+
+        /* Override sponsored yellow backgrounds */
+        article[data-is-sponsored="true"] .bg-yellow-50\\/50,
+        article[data-is-sponsored="true"] .bg-yellow-100\\/50 {
+            background-color: transparent !important;
+            background: transparent !important;
+        }
+
+        /* Override sponsored yellow text */
+        article[data-is-sponsored="true"] .text-yellow-600,
+        article[data-is-sponsored="true"] .text-yellow-700 {
+            color: rgb(243 244 246) !important; /* text-theme-100 */
+        }
+
+        /* Override sponsored gradient buttons */
+        article[data-is-sponsored="true"] button[class*="from-sky"],
+        article[data-is-sponsored="true"] button[class*="to-blue"] {
+            background-color: rgb(37 99 235) !important; /* bg-blue-600 -> bg-theme-600 equivalent */
+            background: rgb(37 99 235) !important;
+        }
+
+        /* Force theme colors on sponsored cards */
+        article[data-is-sponsored="true"] .bg-gradient-to-r {
+            background: none !important;
+            background-color: inherit !important;
+        }
+
+        /* Ensure sponsored cards maintain proper styling even after DOM updates */
+        article[data-is-sponsored="true"] .relative.rounded-md {
+            background-color: rgb(30 41 59) !important;
+        }
     `;
     document.head.appendChild(style);
+
+    // === INTERSECTION OBSERVER FOR VIEWPORT DETECTION ===
+    // Normalize sponsored cards as they enter the viewport
+    const viewportObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                const card = entry.target;
+                if (!card.dataset.isNormalized) {
+                    normalizeSponsored(card);
+                    debugLog('Viewport-triggered normalization for card');
+                }
+            }
+        });
+    }, {
+        root: null,
+        rootMargin: '50px', // Start normalizing before card is fully visible
+        threshold: 0.1
+    });
+
+    // Monitor all existing and future cards
+    function observeCards() {
+        const cards = document.querySelectorAll('article.group.relative');
+        cards.forEach(card => {
+            if (!card.dataset.viewportObserved) {
+                card.dataset.viewportObserved = 'true';
+                viewportObserver.observe(card);
+            }
+        });
+    }
+
+    // Start observing
+    observeCards();
+
+    // === PERIODIC VERIFICATION SYSTEM ===
+    // Continuously check for un-normalized sponsored cards
+    let verificationInterval;
+
+    function startPeriodicVerification() {
+        if (verificationInterval) clearInterval(verificationInterval);
+
+        verificationInterval = setInterval(() => {
+            const allCards = document.querySelectorAll('article.group.relative');
+            let normalizedCount = 0;
+            let sponsoredCount = 0;
+
+            allCards.forEach(card => {
+                // Re-check for sponsored status
+                if (isSponsored(card)) {
+                    sponsoredCount++;
+                    if (!card.dataset.isNormalized) {
+                        normalizeSponsored(card);
+                        normalizedCount++;
+                        debugLog('Periodic verification: re-normalized sponsored card');
+                    }
+                }
+            });
+
+            // Only log when there's activity to avoid console spam
+            if (normalizedCount > 0) {
+                debugLog(`Periodic check: ${normalizedCount} cards re-normalized (${sponsoredCount} total sponsored)`);
+            }
+
+            // Re-observe new cards
+            observeCards();
+
+        }, 5000); // Check every 5 seconds
+    }
+
+    function stopPeriodicVerification() {
+        if (verificationInterval) {
+            clearInterval(verificationInterval);
+            verificationInterval = null;
+        }
+    }
+
+    // Start periodic verification
+    startPeriodicVerification();
+
+    // Stop verification when page is hidden to save resources
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            stopPeriodicVerification();
+        } else {
+            startPeriodicVerification();
+        }
+    });
 
 })();
