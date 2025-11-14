@@ -265,39 +265,50 @@
             // For Recently Updated/Oldest Updated, sortCards returns cards in current order (no sort applied)
             const sortedCards = sortCards(allCards, sortOption);
 
-            // Re-insert cards to mix sponsored with regular markets
+            // Check if reordering is actually needed and significant
             if (sortedCards.length > 0) {
                 const container = sortedCards[0].parentElement;
                 if (container) {
-                    // Preserve hover states by temporarily disabling hover effects
-                    const originalTransitions = [];
-                    sortedCards.forEach(card => {
-                        const computedStyle = window.getComputedStyle(card);
-                        originalTransitions.push({
-                            element: card,
-                            transition: computedStyle.transition,
-                            pointerEvents: computedStyle.pointerEvents
-                        });
-                        // Disable transitions and pointer events during reordering
-                        card.style.transition = 'none';
-                        card.style.pointerEvents = 'none';
-                    });
+                    const currentCards = Array.from(container.children);
 
-                    // Re-insert cards without using fragment to maintain better control
-                    sortedCards.forEach((card, index) => {
-                        container.appendChild(card);
-                    });
+                    // Only reorder if there's a significant difference (more than 1 position change)
+                    let significantDifference = false;
+                    let maxDisplacement = 0;
 
-                    // Restore hover states after a brief delay
-                    setTimeout(() => {
-                        sortedCards.forEach((card, index) => {
-                            if (originalTransitions[index]) {
-                                const { transition, pointerEvents } = originalTransitions[index];
-                                card.style.transition = transition;
-                                card.style.pointerEvents = pointerEvents;
-                            }
+                    for (let i = 0; i < sortedCards.length; i++) {
+                        const card = sortedCards[i];
+                        const currentIndex = currentCards.indexOf(card);
+                        const displacement = Math.abs(i - currentIndex);
+
+                        if (displacement > 1) {
+                            significantDifference = true;
+                            maxDisplacement = Math.max(maxDisplacement, displacement);
+                        }
+                    }
+
+                    // Only reorder if there's a significant difference to avoid unnecessary DOM manipulation
+                    if (significantDifference && maxDisplacement > 2) {
+                        // Disable transitions on the container to prevent flicker
+                        const originalTransition = container.style.transition;
+                        container.style.transition = 'none';
+
+                        // Create a document fragment for batch DOM manipulation
+                        const fragment = document.createDocumentFragment();
+
+                        // Add all sorted cards to fragment in order
+                        sortedCards.forEach(card => {
+                            fragment.appendChild(card);
                         });
-                    }, 50);
+
+                        // Clear container and append all cards at once
+                        container.innerHTML = '';
+                        container.appendChild(fragment);
+
+                        // Re-enable transitions after a brief delay
+                        setTimeout(() => {
+                            container.style.transition = originalTransition;
+                        }, 100);
+                    }
                 }
             }
 
@@ -415,8 +426,11 @@
 
 // creates or finds the pinned Marketplaces section and caches all section grids.
     function initializeSections() {
-        // cache it
-        const sections = document.querySelectorAll('div[data-v-cd0f6ace].space-y-4');
+        console.log('[Pricempire] initializeSections called');
+
+        // cache it - use generic selectors that work in both Grid and List view
+        const sections = document.querySelectorAll('div.space-y-4');
+        console.log('[Pricempire] Found sections:', sections.length);
 
         sections.forEach(section => {
             const titleEl = section.querySelector('h3');
@@ -424,39 +438,59 @@
             if (titleEl && gridEl) {
                 const title = titleEl.textContent.trim();
                 marketplaceSections[title] = gridEl;
+                console.log('[Pricempire] Cached section:', title);
             }
         });
 
+        console.log('[Pricempire] Cached sections:', Object.keys(marketplaceSections));
+
         // check for the pinned section
         pinnedMarketplacesGrid = marketplaceSections['Pinned Marketplaces'];
+        console.log('[Pricempire] Pinned Marketplaces section found:', !!pinnedMarketplacesGrid);
 
         if (!pinnedMarketplacesGrid) {
-            const mainContainer = document.querySelector('.space-y-6[data-v-cd0f6ace]');
+            console.log('[Pricempire] Creating Pinned Marketplaces section...');
+            // Try multiple selectors for main container to be more robust
+            const mainContainer = document.querySelector('.space-y-6') ||
+                                document.querySelector('.space-y-4')?.parentElement ||
+                                document.querySelector('main') ||
+                                document.querySelector('[class*="space-y"]');
+            console.log('[Pricempire] Main container found:', !!mainContainer, 'selector used:', mainContainer ? mainContainer.className : 'none');
 
             if (mainContainer) {
                 const newPinnedSection = document.createElement('div');
                 newPinnedSection.className = 'space-y-4';
-                newPinnedSection.setAttribute('data-v-cd0f6ace', '');
+                // Try to preserve Vue data attributes if they exist on other elements
+                const firstExistingSection = document.querySelector('div.space-y-4');
+                if (firstExistingSection && firstExistingSection.getAttribute('data-v-cd0f6ace')) {
+                    newPinnedSection.setAttribute('data-v-cd0f6ace', '');
+                }
+
                 newPinnedSection.innerHTML = `
-                    <div class="flex items-center justify-between" data-v-cd0f6ace="">
-                        <div class="flex items-center gap-3" data-v-cd0f6ace="">
-                            <div class="rounded-lg bg-yellow-500/10 p-2" data-v-cd0f6ace="">
-                                <span class="iconify i-material-symbols-light:family-star-sharp h-5 w-5 text-yellow-500" aria-hidden="true" data-v-cd0f6ace=""></span>
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-3">
+                            <div class="rounded-lg bg-yellow-500/10 p-2">
+                                <span class="iconify i-material-symbols-light:family-star-sharp h-5 w-5 text-yellow-500" aria-hidden="true"></span>
                             </div>
-                            <h3 class="text-lg font-semibold" data-v-cd0f6ace="">Pinned Marketplaces</h3>
+                            <h3 class="text-lg font-semibold">Pinned Marketplaces</h3>
                         </div>
                     </div>
-                    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" data-v-cd0f6ace=""></div>
+                    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"></div>
                 `;
                 // Insert after first section to maintain correct order (after Featured Deals, etc)
                 const firstSection = mainContainer.querySelector('.space-y-4');
                 if (firstSection) {
                     firstSection.insertAdjacentElement('afterend', newPinnedSection);
+                    console.log('[Pricempire] Inserted after first section');
                 } else {
                     mainContainer.prepend(newPinnedSection);
+                    console.log('[Pricempire] Prepend to main container');
                 }
                 pinnedMarketplacesGrid = newPinnedSection.querySelector('.grid');
                 marketplaceSections['Pinned Marketplaces'] = pinnedMarketplacesGrid;
+                console.log('[Pricempire] Pinned Marketplaces section created, grid found:', !!pinnedMarketplacesGrid);
+            } else {
+                console.error('[Pricempire] Could not find main container to create Pinned Marketplaces section');
             }
         }
     }
@@ -1985,7 +2019,7 @@
             lastCardCount = 0;
             mergeAndSortSponsored();
         }
-    }, 1000); // Reduced from 500ms to 1000ms
+    }, 2000); // Further reduced to minimize interference
 
     // Monitor filter changes (payment method, etc.) - with debouncing
     let filterTimeout = null;
@@ -2002,7 +2036,7 @@
             lastSortOption = null;
             lastCardCount = 0;
             mergeAndSortSponsored();
-        }, 300); // Increased from 100ms to 300ms
+        }, 500); // Further increased debounce delay
     });
 
     // Observe changes to the offers section for filter updates
