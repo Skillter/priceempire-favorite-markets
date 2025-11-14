@@ -514,12 +514,8 @@
 
             // Click the first button and recurse
             const btn = showMoreBtns[0];
-            const clickEvent = new MouseEvent('click', {
-                bubbles: true,
-                cancelable: true,
-                view: window
-            });
-            btn.dispatchEvent(clickEvent);
+            // Use a simpler click method to avoid MouseEvent issues
+            btn.click();
             setTimeout(expandNextButton, 800); // Wait for content to load, then check for next button
         };
 
@@ -703,21 +699,81 @@
 
     // Cache for API responses to avoid rate limiting
     const steamPriceCache = new Map();
-    const API_CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+    const API_CACHE_DURATION = 60 * 60 * 1000; // 1 hour for Steam API caching
+
+    // Steam Buy Order extraction from orange-bordered section
+    function extractSteamBuyOrderPrice() {
+        try {
+            console.log('[Pricempire] Looking for Steam Buy Order section...');
+
+            // Target the specific orange-bordered Steam Buy Order section
+            const buyOrderSection = document.querySelector('.mt-6 .rounded-lg.border.border-orange-500\\/30.bg-orange-900\\/20.p-4');
+
+            if (!buyOrderSection) {
+                console.log('[Pricempire] Steam Buy Order section not found');
+                return null;
+            }
+
+            console.log('[Pricempire] Found Steam Buy Order section:', buyOrderSection);
+
+            // Look for the buy order price in the orange text
+            const priceElement = buyOrderSection.querySelector('span.text-orange-400');
+
+            if (priceElement) {
+                const priceText = priceElement.textContent.trim();
+                console.log('[Pricempire] Steam Buy Order price text:', priceText);
+
+                // Extract numeric buy order price
+                const priceMatch = priceText.match(/[$€£]?\s*([0-9.,]+)/);
+                if (priceMatch) {
+                    const price = parseFloat(priceMatch[1].replace(/,/g, ''));
+                    if (!isNaN(price) && price > 0) {
+                        console.log('[Pricempire] SUCCESS - Extracted Steam Buy Order price:', price);
+
+                        // Store buy order price globally for other uses
+                        window.steamBuyOrderPrice = price;
+
+                        return {
+                            buyOrderPrice: price,
+                            source: 'steam-buy-order-section'
+                        };
+                    }
+                }
+            }
+
+            console.log('[Pricempire] No buy order price found in Steam Buy Order section');
+            return null;
+
+        } catch (error) {
+            console.error('[Pricempire] Error extracting Steam Buy Order price:', error);
+            return null;
+        }
+    }
 
     async function findSteamPriceData() {
         debugLog('Searching for Steam price data...');
 
-        // Method 0: Primary - Extract Steam price from Steam marketplace card in offers section (most efficient)
-        debugLog('Method 0: Searching Steam marketplace card in DOM...');
+        // Method 1: Extract Steam Buy Order from orange-bordered section
+        debugLog('Method 1: Extracting Steam Buy Order from DOM section...');
+        const buyOrderData = extractSteamBuyOrderPrice();
+        if (buyOrderData && buyOrderData.buyOrderPrice > 0) {
+            debugLog('Found Steam Buy Order price:', buyOrderData.buyOrderPrice);
+            console.log('[Pricempire] STEAM BUY ORDER SOURCE: Method 1 - Steam Buy Order section, buy order price:', buyOrderData.buyOrderPrice);
+            // Don't return yet - we still need the sell order price from marketplace cards or API
+        } else {
+            debugLog('No Steam Buy Order section found or no valid buy order price extracted');
+        }
+
+        // Method 2: Extract Steam price from Steam marketplace card (sell price)
+        debugLog('Method 2: Searching Steam marketplace card for sell price...');
         const steamMarketplaceCard = findSteamMarketplaceCard();
         if (steamMarketplaceCard) {
             const priceData = extractPriceFromCard(steamMarketplaceCard);
             if (priceData && priceData.mainPrice > 0) {
-                debugLog('Found Steam price data from marketplace card:', priceData, 'method: DOM extraction');
+                debugLog('Found Steam marketplace card sell price:', priceData.mainPrice, 'method: DOM extraction');
                 // Store buy order price globally for use in replacement
                 window.steamBuyOrderPrice = priceData.buyOrderPrice;
-                console.log('[Pricempire] STEAM PRICE SOURCE: Method 0 - DOM extraction, price:', priceData.mainPrice);
+                console.log('[Pricempire] STEAM PRICE SOURCE: Method 2 - Steam marketplace card, sell price:', priceData.mainPrice);
                 return priceData.mainPrice.toString();
             } else {
                 debugLog('Steam marketplace card found but no valid price data extracted');
@@ -726,403 +782,21 @@
             debugLog('No Steam marketplace card found in DOM');
         }
 
-        // Method 1: Check for Nuxt.js data and window objects (fallback)
-        if (typeof window !== 'undefined') {
-            // Check various possible Nuxt.js data structures
-            if (window.__NUXT__) {
-                debugLog('Found __NUXT__ data, structure:', Object.keys(window.__NUXT__));
-                if (window.__NUXT__.data) {
-                    debugLog('__NUXT__.data structure:', Object.keys(window.__NUXT__.data));
-                    if (window.__NUXT__.data[0]) {
-                        debugLog('__NUXT__.data[0] keys:', Object.keys(window.__NUXT__.data[0]));
-                        if (window.__NUXT__.data[0].item) {
-                            debugLog('item keys:', Object.keys(window.__NUXT__.data[0].item));
-                        }
-                    }
-                }
-
-                // Enhanced dynamic path discovery for Steam price data
-                const findSteamPriceInObject = (obj, path = '', maxDepth = 6) => {
-                    if (!obj || typeof obj !== 'object' || maxDepth <= 0) return null;
-
-                    for (const [key, value] of Object.entries(obj)) {
-                        const currentPath = path ? `${path}.${key}` : key;
-
-                        // Direct Steam price matches
-                        if (typeof value === 'number' && value > 0) {
-                            const lowerKey = key.toLowerCase();
-                            const lowerPath = path.toLowerCase();
-
-                            // More comprehensive Steam detection
-                            if (lowerKey.includes('steam') && (lowerKey.includes('price') || lowerKey.includes('cost'))) {
-                                debugLog('Found direct Steam price:', value, 'at:', currentPath);
-                                return value;
-                            }
-
-                            // Provider/marketplace specific Steam price
-                            if (lowerPath.includes('steam') && (lowerKey.includes('price') || lowerKey.includes('cost'))) {
-                                debugLog('Found Steam provider price:', value, 'at:', currentPath);
-                                return value;
-                            }
-                        }
-
-                        // Array search for providers/charts
-                        if (Array.isArray(value) && (key.toLowerCase().includes('provider') || key.toLowerCase().includes('chart') || key.toLowerCase().includes('market'))) {
-                            const steamEntry = value.find(item => {
-                                if (!item || typeof item !== 'object') return false;
-                                const itemKeys = Object.keys(item);
-                                return itemKeys.some(k => {
-                                    const val = item[k];
-                                    return (typeof val === 'string' && val.toLowerCase() === 'steam') ||
-                                           (typeof val === 'string' && val.toLowerCase().includes('steam'));
-                                });
-                            });
-
-                            if (steamEntry && steamEntry.price) {
-                                debugLog('Found Steam provider in array:', steamEntry.price, 'at:', currentPath);
-                                return steamEntry.price;
-                            }
-                        }
-
-                        // Recursive search
-                        const result = findSteamPriceInObject(value, currentPath, maxDepth - 1);
-                        if (result) return result;
-                    }
-                    return null;
-                };
-
-                // Try dynamic search in multiple global objects
-                const globalObjects = [
-                    { obj: window.__NUXT__, name: '__NUXT__' },
-                    { obj: window.__INITIAL_STATE__, name: '__INITIAL_STATE__' },
-                    { obj: window.initialState, name: 'initialState' },
-                    { obj: window.state, name: 'state' }
-                ];
-
-                for (const { obj, name } of globalObjects) {
-                    if (obj) {
-                        debugLog(`Searching in ${name} object`);
-                        const dynamicResult = findSteamPriceInObject(obj);
-                        if (dynamicResult) {
-                            console.log('[Pricempire] STEAM PRICE SOURCE: Method 1 - Dynamic search in', name + ', price:', dynamicResult);
-                            return dynamicResult.toString();
-                        }
-                    }
-                }
-
-                // Fallback to specific hardcoded paths (limited to most likely ones)
-                const possiblePaths = [
-                    // Most likely paths based on common patterns
-                    () => window.__NUXT__?.data?.[0]?.item?.steamPrice,
-                    () => window.__NUXT__?.data?.[0]?.steamPrice,
-                    () => window.__NUXT__?.payload?.data?.[0]?.steamPrice,
-                    () => window.__INITIAL_STATE__?.item?.steamPrice,
-                    () => window.steamPrice,
-                    () => window.steamMarketPrice
-                ];
-
-                for (let i = 0; i < possiblePaths.length; i++) {
-                    try {
-                        const price = possiblePaths[i]();
-                        debugLog(`Path ${i + 1} result:`, price);
-                        if (price && price > 0) {
-                            console.log('[Pricempire] Found Steam price in Nuxt data:', price, 'path index:', i + 1);
-                            return price.toString();
-                        }
-                    } catch (e) {
-                        debugLog(`Path ${i + 1} failed:`, e.message);
-                    }
-                }
-
-                // Deep search for Steam price values ONLY - strict validation
-                const deepSearch = (obj, path = '', depth = 0) => {
-                    if (depth > 5 || !obj || typeof obj !== 'object') return null;
-
-                    for (const [key, value] of Object.entries(obj)) {
-                        const currentPath = path ? `${path}.${key}` : key;
-
-                        if (typeof value === 'number' && value > 0) {
-                            // STRICTLY Steam price keys only - no generic "price" keys
-                            if (key.toLowerCase().includes('steam') ||
-                                (key.toLowerCase().includes('price') && (path.toLowerCase().includes('steam') || key.toLowerCase().includes('steam')))) {
-                                debugLog('Found Steam price in deep search:', value, 'at:', currentPath);
-                                return value;
-                            }
-                        }
-
-                        if (typeof value === 'object' && depth < 5) {
-                            const result = deepSearch(value, currentPath, depth + 1);
-                            if (result) return result;
-                        }
-                    }
-                    return null;
-                };
-
-                const deepResult = deepSearch(window.__NUXT__);
-                if (deepResult) {
-                    console.log('[Pricempire] Deep search found Steam price:', deepResult);
-                    return deepResult.toString();
-                }
-            }
-
-            // Check other global objects
-            const globalObjects = [
-                'window.itemData', 'window.item', 'window.productData',
-                'window.product', 'window.marketData', 'window.prices'
-            ];
-
-            for (const objPath of globalObjects) {
-                try {
-                    const obj = eval(objPath);
-                    if (obj && (obj.steamPrice || obj.steam || obj.price?.steam)) {
-                        const price = obj.steamPrice || obj.steam || obj.price?.steam;
-                        if (price > 0) {
-                            console.log('[Pricempire] Found Steam price in', objPath, ':', price);
-                            return price.toString();
-                        }
-                    }
-                } catch (e) {
-                    // Skip invalid objects
-                }
-            }
-        }
-
-        // Method 2: Search all script tags for Steam price data
-        const scripts = document.querySelectorAll('script:not([src])');
-        debugLog('Searching in', scripts.length, 'script tags');
-
-        for (let i = 0; i < scripts.length; i++) {
-            const script = scripts[i];
-            if (script.textContent) {
-                debugLog(`Script ${i + 1} content length:`, script.textContent.length);
-
-                // Log a sample of each script content for debugging
-                if (script.textContent.length > 0) {
-                    if (script.textContent.length < 5000) {
-                        debugLog(`Script ${i + 1} sample:`, script.textContent.substring(0, 200));
-                    } else {
-                        debugLog(`Script ${i + 1} is large (${script.textContent.length} chars), searching for Steam patterns...`);
-                        // For large scripts, let's search for a few specific patterns to see what's in there
-                        const quickPatterns = [/steam/gi, /price/gi, /"provider"/gi];
-                        for (const quickPattern of quickPatterns) {
-                            const quickMatches = script.textContent.match(quickPattern);
-                            if (quickMatches) {
-                                debugLog(`Script ${i + 1} has ${quickMatches.length} matches for pattern:`, quickPattern.source);
-                            }
-                        }
-
-                        // For script 10 (the large one), let's do more intensive Steam price search
-                        if (script.textContent.length > 500000) {
-                            debugLog('Doing intensive Steam price search in large script...');
-
-                            // Look for specific patterns that might indicate Steam price
-                            const intensivePatterns = [
-                                /"name"\s*:\s*"?Steam"?[^}]*"price"\s*:\s*"?([0-9.,]+)"?/gi,
-                                /"provider"\s*:\s*"?steam"?[^}]*"price"\s*:\s*"?([0-9.,]+)"?/gi,
-                                /"steam"[^}]*"price"\s*:\s*"?([0-9.,]+)"?/gi,
-                                /Steam[^0-9]*\$?([0-9]+\.[0-9]{2})/gi,
-                                /\{[^}]*"Steam"[^}]*\$?([0-9]+\.[0-9]{2})[^}]*\}/gi
-                            ];
-
-                            for (const pattern of intensivePatterns) {
-                                const matches = [...script.textContent.matchAll(pattern)];
-                                console.log(`[Pricempire] Pattern ${pattern.source} found ${matches.length} matches`);
-
-                                for (const match of matches) {
-                                    const price = parseFloat(match[1]);
-                                    if (!isNaN(price) && price > 0 && price < 10000) {
-                                        const context = script.textContent.substring(Math.max(0, match.index - 50), match.index + 50);
-                                        console.log('[Pricempire] Potential Steam price from intensive search:', price, 'context:', context);
-                                        return price.toString();
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Look for ONLY actual Steam price patterns - very strict validation
-                const steamPricePatterns = [
-                    // Strict Steam price keys ONLY - these are the most reliable
-                    /"steamPrice"\s*:\s*"?([0-9.,]+)"?/gi,
-                    /"steamMarketPrice"\s*:\s*"?([0-9.,]+)"?/gi,
-                    /"steam_market_price"\s*:\s*"?([0-9.,]+)"?/gi,
-                    // Steam provider with explicit price context - very specific
-                    /"provider"\s*:\s*"?steam"?[^}]*"price"\s*:\s*"?([0-9.,]+)"?/gi,
-                    // Steam object with explicit price key - very specific
-                    /"steam"\s*:\s*{\s*"price"\s*:\s*"?([0-9.,]+)"?/gi,
-                    // Steam marketplace data - only if clearly labeled as price
-                    /"steamMarket"[^}]*"price"\s*:\s*"?([0-9.,]+)"?/gi,
-                    // Steam listing data - look for listing_price or similar
-                    /"steam"[^}]*"listing_price"\s*:\s*"?([0-9.,]+)"?/gi,
-                    /"steam"[^}]*"lowest_price"\s*:\s*"?([0-9.,]+)"?/gi,
-                    /"steam"[^}]*"highest_price"\s*:\s*"?([0-9.,]+)"?/gi,
-                    // More possible patterns
-                    /"name"\s*:\s*"?Steam"?[^}]*"price"\s*:\s*"?([0-9.,]+)"?/gi,
-                    /"marketplace_name"\s*:\s*"?Steam"?[^}]*"price"\s*:\s*"?([0-9.,]+)"?/gi,
-                    // Arrays of marketplaces - look for Steam entry
-                    /\[\s*\{[^}]*"name"\s*:\s*"?Steam"?[^}]*"price"\s*:\s*"?([0-9.,]+)"?/gi
-                ];
-
-                for (const pattern of steamPricePatterns) {
-                    const matches = [...script.textContent.matchAll(pattern)];
-                    for (const match of matches) {
-                        const price = parseFloat(match[1]);
-                        const context = script.textContent.substring(Math.max(0, match.index - 100), match.index + 100);
-
-                        console.log('[Pricempire] Potential Steam price found:', price, 'pattern:', pattern.source, 'context:', context);
-
-                        // STRICT validation: ensure this is Steam price ONLY with proper price context
-                        if (!isNaN(price) && price > 0) {
-                            // Remove artificial price limits - Steam prices can be any value
-                            // Some rare items can cost thousands of dollars
-
-                            // Validate that this is actually a price, not a random number
-                            const priceIndicators = [
-                                pattern.source.includes('steamPrice'),
-                                pattern.source.includes('steamMarketPrice'),
-                                pattern.source.includes('"price"'),
-                                pattern.source.includes('listing_price'),
-                                pattern.source.includes('lowest_price'),
-                                pattern.source.includes('highest_price'),
-                                context.toLowerCase().includes('"price"'),
-                                context.toLowerCase().includes('listing'),
-                                context.toLowerCase().includes('market')
-                            ];
-
-                            // Also validate that the price isn't obviously not a price (too small, transaction count, etc.)
-                            const isRealisticPrice = price > 0.01 && price < 100000; // Reasonable price range
-
-                            if (priceIndicators.length > 0 && isRealisticPrice) {
-                                console.log('[Pricempire] Validated STEAM price in script:', price, 'pattern:', pattern.source);
-                                return price.toString();
-                            } else {
-                                console.log('[Pricempire] Rejected non-price value:', price, 'lacks price context indicators');
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Method 3: Look for any DOM elements that might contain Steam pricing
-        debugLog('Searching DOM elements for Steam prices...');
-
-        // Look for elements with Steam-related attributes or text
-        const steamSelectors = [
-            '[data-steam-price]',
-            '[data-steam]',
-            '*[class*="steam"]',
-            '*[id*="steam"]'
-        ];
-
-        for (const selector of steamSelectors) {
-            const elements = document.querySelectorAll(selector);
-            for (const element of elements) {
-                const text = element.textContent || element.value || element.getAttribute('data-steam-price');
-                if (text) {
-                    const priceMatch = text.match(/[$€£]?\s*([0-9.,]+)\s*(USD|steam)?/i);
-                    if (priceMatch) {
-                        const price = parseFloat(priceMatch[1]);
-                        if (!isNaN(price) && price > 0) {
-                            console.log('[Pricempire] Found Steam price in DOM element:', price);
-                            return price.toString();
-                        }
-                    }
-                }
-            }
-        }
-
-        // Method 4: Check API responses or network data
-        // Look for any JSON data in the page that might contain Steam prices
-        const jsonElements = document.querySelectorAll('script[type="application/json"], script[type="application/ld+json"]');
-        for (const element of jsonElements) {
-            try {
-                const data = JSON.parse(element.textContent);
-                const steamPrice = findSteamPriceInObject(data);
-                if (steamPrice) {
-                    console.log('[Pricempire] Found Steam price in JSON element:', steamPrice);
-                    return steamPrice;
-                }
-            } catch (e) {
-                // Skip invalid JSON
-            }
-        }
-
-        // Method 5: Look for hidden elements or comments with Steam data
-        const hiddenElements = document.querySelectorAll('[style*="display: none"], [style*="visibility: hidden"], [hidden], comment');
-        for (const element of hiddenElements) {
-            const text = element.textContent || element.data;
-            if (text && (text.includes('Steam') || text.includes('steam'))) {
-                const priceMatch = text.match(/[$€£]?\s*([0-9.,]+)\s*USD?/);
-                if (priceMatch) {
-                    const price = parseFloat(priceMatch[1]);
-                    if (!isNaN(price) && price > 0) {
-                        console.log('[Pricempire] Found Steam price in hidden element:', price);
-                        return price.toString();
-                    }
-                }
-            }
-        }
-
-        // Method 6: Pricempire API integration (when DOM and local data fail)
-        debugLog('Method 6: Trying Pricempire API integration...');
-        try {
-            const apiPrice = await fetchSteamPriceFromAPI();
-            if (apiPrice) {
-                console.log('[Pricempire] STEAM PRICE SOURCE: Method 6 - Pricempire API, price:', apiPrice);
-                return apiPrice;
-            } else {
-                debugLog('Method 6: API returned null/undefined');
-            }
-        } catch (apiError) {
-            debugLog('Method 6: API call failed with error:', apiError.message);
-        }
-
-        debugLog('About to start Method 7 - Alternative Steam price extraction');
-        // Method 7: Alternative Steam price extraction from visible market data
-        debugLog('Method 7: Extracting Steam price from existing market data...');
-        try {
-            const alternativePrice = extractSteamPriceFromVisibleData();
-            if (alternativePrice) {
-                console.log('[Pricempire] STEAM PRICE SOURCE: Method 7 - Visible data extraction, price:', alternativePrice);
-                return alternativePrice;
-            } else {
-                debugLog('Method 7: No Steam price found in visible data');
-            }
-        } catch (altError) {
-            debugLog('Method 7: Alternative extraction failed with error:', altError.message);
-        }
-
-        // Method 8: Enhanced script data search (fallback)
-        debugLog('Method 8: Searching for Steam price in embedded script data...');
-        try {
-            const scriptPrice = findSteamPriceInScripts();
-            if (scriptPrice) {
-                console.log('[Pricempire] STEAM PRICE SOURCE: Method 8 - Script data search, price:', scriptPrice);
-                return scriptPrice;
-            } else {
-                debugLog('Method 8: No Steam price found in script data');
-            }
-        } catch (scriptError) {
-            debugLog('Method 8: Script search failed with error:', scriptError.message);
-        }
-
-        // Method 9: Steam Community Market API (ultimate fallback)
-        debugLog('Method 9: Trying Steam Community Market API...');
+        // Method 3: Steam Community Market API with 1-hour caching (final fallback)
+        debugLog('Method 3: Trying Steam Community Market API with cache...');
         try {
             const steamMarketPrice = await fetchSteamPriceFromSteamAPI();
             if (steamMarketPrice) {
-                console.log('[Pricempire] STEAM PRICE SOURCE: Method 9 - Steam Community Market API, price:', steamMarketPrice);
+                console.log('[Pricempire] STEAM PRICE SOURCE: Method 3 - Steam Community Market API, price:', steamMarketPrice);
                 return steamMarketPrice;
             } else {
-                debugLog('Method 9: Steam API returned null/undefined');
+                debugLog('Method 3: Steam API returned null/undefined');
             }
         } catch (steamApiError) {
-            debugLog('Method 9: Steam API call failed with error:', steamApiError.message);
+            debugLog('Method 3: Steam API call failed with error:', steamApiError.message);
         }
 
-        console.log('[Pricempire] No real Steam price data found in any source');
+        console.log('[Pricempire] No Steam price data found from any of the 3 methods');
         return null;
     }
 
@@ -1376,165 +1050,12 @@
 
     // Helper function to find Steam marketplace card in offers section
     function findSteamMarketplaceCard() {
-        // Multiple reliable selectors to find Steam marketplace card
-        const steamSelectors = [
-            // NEW: Primary method - Look for Steam card with aria-label="Offer from Steam"
-            () => {
-                const steamCard = document.querySelector('article[aria-label="Offer from Steam"]');
-                if (steamCard) {
-                    console.log('[Pricempire] Found Steam card via aria-label');
-                    return steamCard;
-                }
-                return null;
-            },
-
-            // NEW: Look for Steam card by Steam icon and price structure
-            () => {
-                const cards = document.querySelectorAll('article.group.relative');
-                for (const card of cards) {
-                    // Look for Steam icon
-                    const steamIcon = card.querySelector('img[src*="steam_icon.webp"], img[alt="Steam"]');
-                    if (steamIcon) {
-                        // Look for price element with the structure from your HTML
-                        const priceElement = card.querySelector('.text-2xl.font-bold.tracking-tight.text-theme-100');
-                        if (priceElement && priceElement.textContent.startsWith('$')) {
-                            console.log('[Pricempire] Found Steam card via icon and price:', priceElement.textContent);
-                            return card;
-                        }
-                    }
-                }
-                return null;
-            },
-
-            // NEW: Look for green cube icon (Steam stock indicator) + Steam icon
-            () => {
-                const cards = document.querySelectorAll('article.group.relative');
-                for (const card of cards) {
-                    const steamIcon = card.querySelector('img[src*="steam_icon.webp"], img[alt="Steam"]');
-                    const cubeIcon = card.querySelector('.iconify.i-heroicons\\:cube.text-green-500');
-                    if (steamIcon && cubeIcon) {
-                        const priceElement = card.querySelector('.text-2xl.font-bold.tracking-tight.text-theme-100');
-                        if (priceElement && priceElement.textContent.startsWith('$')) {
-                            console.log('[Pricempire] Found Steam card via cube + Steam icon:', priceElement.textContent);
-                            return card;
-                        }
-                    }
-                }
-                return null;
-            },
-
-  
-            // NEW: Search for any Steam-related content
-            () => {
-                // Look for any element containing "Steam" and "$" near each other
-                const allElements = document.querySelectorAll('*');
-                for (const element of allElements) {
-                    const text = element.textContent || '';
-                    if (text.includes('Steam') && text.includes('$') && text.length < 500) {
-                        // Check if this element or a parent has price structure
-                        const priceElement = element.querySelector('.text-2xl, .font-bold, [class*="price"], [class*="text-theme"]');
-                        if (priceElement) {
-                            const priceText = priceElement.textContent.trim();
-                            if (priceText.match(/^\$\d+\.\d+$/)) {
-                                console.log('[Pricempire] Found Steam price via brute force:', priceText);
-                                return element.closest('article');
-                            }
-                        }
-                    }
-                }
-                return null;
-            },
-
-            // NEW: Enhanced search for filtered/hidden Steam cards
-            () => {
-                // Look for Steam cards that might be filtered out or hidden
-                const allCards = document.querySelectorAll('article.group.relative');
-                for (const card of allCards) {
-                    // Check for Steam-related attributes or data
-                    const steamIndicators = [
-                        card.getAttribute('data-provider'),
-                        card.getAttribute('data-marketplace'),
-                        card.getAttribute('aria-label'),
-                        card.querySelector('img')?.alt,
-                        card.querySelector('img')?.src
-                    ];
-
-                    const hasSteamIndicator = steamIndicators.some(indicator =>
-                        indicator && (indicator.toLowerCase().includes('steam') || indicator.includes('steam_icon'))
-                    );
-
-                    if (hasSteamIndicator) {
-                        // Check if card might be filtered out (hidden, disabled, etc.)
-                        const isFiltered = card.style.display === 'none' ||
-                                         card.style.visibility === 'hidden' ||
-                                         card.classList.contains('hidden') ||
-                                         card.getAttribute('aria-hidden') === 'true';
-
-                        // Even if filtered, try to extract price
-                        const priceSelectors = [
-                            '.text-2xl.font-bold.tracking-tight.text-theme-100',
-                            '.text-xl.font-bold.text-theme-100',
-                            '[class*="price"]',
-                            '[class*="text-theme"][class*="bold"]'
-                        ];
-
-                        for (const selector of priceSelectors) {
-                            const priceElement = card.querySelector(selector);
-                            if (priceElement) {
-                                const priceText = priceElement.textContent.trim();
-                                if (priceText.match(/^\$\d+\.\d+$/)) {
-                                    console.log('[Pricempire] Found filtered Steam card:', priceText, 'filtered:', isFiltered);
-                                    return card;
-                                }
-                            }
-                        }
-                    }
-                }
-                return null;
-            },
-
-            // NEW: Search for Steam data in script tags or embedded data
-            () => {
-                // Look for Steam market links or data that might indicate Steam pricing
-                const steamLink = document.querySelector('a[href*="steamcommunity.com/market/listings/730/"]');
-                if (steamLink) {
-                    console.log('[Pricempire] Found Steam market link, but virtual card extraction is unreliable - skipping');
-                    // Virtual card extraction is unreliable - it finds wrong prices from other marketplaces
-                    // Skip this method and let API calls handle Steam price detection properly
-                    return null;
-                }
-                return null;
-            },
-
-            // Backup: Original Market overview method (kept for compatibility)
-            () => {
-                const marketOverviewSection = document.querySelector('section[aria-label="Market overview"]');
-                if (!marketOverviewSection) {
-                    return null;
-                }
-
-                const cards = marketOverviewSection.querySelectorAll('article.group.relative');
-                for (const card of cards) {
-                    const ariaLabel = card.getAttribute('aria-label') || '';
-                    if (ariaLabel.includes('Steam')) {
-                        console.log('[Pricempire] Found Steam card in Market overview');
-                        return card;
-                    }
-                }
-                return null;
-            }
-        ];
-
-        for (let i = 0; i < steamSelectors.length; i++) {
-            try {
-                const card = steamSelectors[i]();
-                if (card) {
-                    console.log(`[Pricempire] Found Steam card with method ${i + 1}`);
-                    return card;
-                }
-            } catch (e) {
-                // Continue to next method
-            }
+        // STRICT: Only look for official Steam marketplace card with exact aria-label
+        const steamCard = document.querySelector('article[aria-label="Offer from Steam"]');
+        if (steamCard) {
+            console.log('[Pricempire] Found official Steam marketplace card via aria-label');
+            console.log('[Pricempire] Steam card marketplace name:', steamCard.querySelector('p.font-bold')?.textContent?.trim());
+            return steamCard;
         }
         return null;
     }
@@ -1545,7 +1066,7 @@
 
         // Extract main price - largest/most prominent price
         const priceSelectors = [
-            // Primary selector: Large price text (Steam card)
+            // Primary selector: Steam card price (exact match)
             '.text-2xl.font-bold.tracking-tight.text-theme-100',
             // Alternative selectors for price elements
             '.text-2xl.font-bold.text-theme-100',
@@ -1633,10 +1154,13 @@
             console.log('[Pricempire] Inferred buy order price from multiple prices:', buyOrderPrice, 'sorted prices:', sortedPrices);
         }
 
-        // Store the actual buy order price for global access
-        if (buyOrderPrice) {
+        // IMPORTANT: Don't overwrite buy order price from Steam cards - they only have sell prices
+        // Buy order prices should only come from the orange DOM section, not Steam marketplace cards
+        if (buyOrderPrice && !card.getAttribute('aria-label')?.includes('Offer from Steam')) {
             window.steamBuyOrderPrice = buyOrderPrice.toFixed(2);
-            console.log('[Pricempire] Stored global steam buy order price:', window.steamBuyOrderPrice);
+            console.log('[Pricempire] Stored global steam buy order price from non-Steam card:', window.steamBuyOrderPrice);
+        } else if (buyOrderPrice && card.getAttribute('aria-label')?.includes('Offer from Steam')) {
+            console.log('[Pricempire] Ignoring buy order price from Steam card (should only use orange section):', buyOrderPrice);
         }
 
         if (mainPrice) {
@@ -2274,53 +1798,51 @@
                         return;
                     }
 
-                    // Enhanced Steam card detection - more strict validation
-                    const isSteamCard =
-                        // Method 1: Check for EXACT "Offer from Steam" aria-label (most reliable)
-                        (card.getAttribute('aria-label') === 'Offer from Steam') ||
+                    // STRICT Steam card detection - only official Steam marketplace cards
+                    const cardAriaLabel = card.getAttribute('aria-label');
+                    const isSteamCard = (cardAriaLabel === 'Offer from Steam');
 
-                        // Method 2: Check for Steam icon + proper price structure
-                        (card.querySelector('img[src*="steam_icon.webp"], img[alt*="Steam"]') &&
-                         card.querySelector('.text-2xl.font-bold.text-theme-100') &&
-                         card.querySelector('.iconify.i-heroicons\\:cube.text-green-500')) ||
-
-                        // Method 3: Strict Steam marketplace pattern
-                        (card.textContent.includes('Steam') &&
-                         card.textContent.includes('in stock') &&
-                         card.textContent.match(/\$\d+\.\d{2}/g)) ||
-
-                        // Method 4: Look for green cube icon (Steam stock indicator) + exact Steam elements
-                        (card.querySelector('.iconify.i-heroicons\\:cube.text-green-500') &&
-                         card.querySelector('img[src*="steam_icon.webp"]'));
+                    // Debug: Log all cards with "Steam" in their aria-label to see what's being checked
+                    if (cardAriaLabel && cardAriaLabel.toLowerCase().includes('steam')) {
+                        console.log('[Pricempire] DEBUG: Found card with "Steam" in aria-label:', {
+                            ariaLabel: cardAriaLabel,
+                            isExactMatch: cardAriaLabel === 'Offer from Steam',
+                            marketplaceName: card.querySelector('a.font-semibold')?.textContent?.trim()
+                        });
+                    }
 
                     if (isSteamCard) {
-                        // Additional validation: ensure this is actually Steam, not just contains "steam" text
-                        const cardHTML = card.innerHTML.toLowerCase();
-                        const steamIconPresent = cardHTML.includes('steam_icon.webp') || cardHTML.includes('alt="steam"');
-                        const steamCubePresent = cardHTML.includes('i-heroicons:cube') && cardHTML.includes('text-green-500');
+                        // Additional validation: ensure this is actually a real Steam marketplace card
+                        const marketplaceName = card.querySelector('p.font-bold')?.textContent?.trim() ||
+                                             card.querySelector('a[href*="/cs2-marketplaces/steam"] p')?.textContent?.trim();
+                        const hasSteamIcon = card.querySelector('img[src*="steam_icon.webp"], img[alt="Steam"]');
+                        const hasSteamCube = card.querySelector('.iconify.i-heroicons\\:cube.text-green-500');
 
-                        // Only mark as Steam if we have clear Steam indicators
-                        if (card.getAttribute('aria-label') === 'Offer from Steam' ||
-                            (steamIconPresent && steamCubePresent) ||
-                            (steamIconPresent && card.textContent.includes('in stock'))) {
+                        console.log('[Pricempire] Steam card validation for card with aria-label="Offer from Steam":', {
+                            marketplaceName: `"${marketplaceName}"`,
+                            hasSteamIcon: !!hasSteamIcon,
+                            hasSteamCube: !!hasSteamCube,
+                            isRealSteam: marketplaceName === 'Steam' && hasSteamIcon,
+                            cardHTML: card.innerHTML.substring(0, 200)
+                        });
 
+                        // Only process if this is actually a real Steam marketplace card
+                        if (marketplaceName === 'Steam' && hasSteamIcon) {
                             newSteamCards.push(card);
                             card.dataset.steamProcessed = 'true'; // Mark as processed
 
                             console.log('[Pricempire] VALID Steam card detected:', {
                                 ariaLabel: card.getAttribute('aria-label'),
-                                hasSteamIcon: !!card.querySelector('img[src*="steam_icon.webp"]'),
-                                hasSteamCube: !!card.querySelector('.iconify.i-heroicons\\:cube.text-green-500'),
-                                textSample: card.textContent.substring(0, 100),
+                                textSample: card.textContent.substring(0, 200),
                                 priceText: card.textContent.match(/\$[\d.,]+/g),
-                                fullCardHTML: card.innerHTML.substring(0, 500) // For debugging
+                                fullHTML: card.innerHTML.substring(0, 500),
+                                marketplaceName: card.querySelector('a.font-semibold')?.textContent?.trim()
                             });
                         } else {
-                            console.log('[Pricempire] Skipping false positive Steam card - missing proper Steam indicators:', {
-                                ariaLabel: card.getAttribute('aria-label'),
-                                hasSteamIcon: steamIconPresent,
-                                hasSteamCube: steamCubePresent,
-                                textSample: card.textContent.substring(0, 100)
+                            console.log('[Pricempire] REJECTED: Card has Steam aria-label but fails real Steam validation:', {
+                                marketplaceName,
+                                hasSteamIcon: !!hasSteamIcon,
+                                hasSteamCube: !!hasSteamCube
                             });
                         }
                     }
@@ -2329,6 +1851,11 @@
                 // Process any newly found Steam cards
                 if (newSteamCards.length > 0) {
                     console.log(`[Pricempire] Processing ${newSteamCards.length} new Steam cards...`);
+                    console.log('[Pricempire] DEBUG: Cards that passed validation:', newSteamCards.map(card => ({
+                        ariaLabel: card.getAttribute('aria-label'),
+                        marketplaceName: card.querySelector('a.font-semibold')?.textContent?.trim(),
+                        hasSteamIcon: !!card.querySelector('img[src*="steam_icon.webp"], img[alt*="Steam"]')
+                    })));
 
                     let bestSteamPrice = null;
                     let bestPriceSource = '';
@@ -2340,6 +1867,7 @@
                         });
 
                         // Try multiple price extraction methods
+                        console.log('[Pricempire] Extracting prices from detected Steam card:', card.querySelector('a.font-semibold')?.textContent?.trim());
                         const priceData = extractPriceFromCard(card);
 
                         let currentPrice = null;
@@ -2348,6 +1876,7 @@
                         if (priceData && priceData.mainPrice > 0) {
                             currentPrice = priceData.mainPrice;
                             currentSource = 'extractPriceFromCard';
+                            console.log('[Pricempire] Extracted price data:', priceData);
                         } else {
                             // Enhanced fallback: More precise Steam price extraction
                             console.log('[Pricempire] ENHANCED PRICE SEARCH IN CARD:');
@@ -2423,8 +1952,8 @@
                                 fetchSteamPriceFromSteamAPI().then(apiSteamPrice => {
                                     if (apiSteamPrice && parseFloat(apiSteamPrice) !== parseFloat(bestSteamPrice)) {
                                         console.log('[Pricempire] API Steam price differs:', apiSteamPrice, 'vs extracted:', bestSteamPrice);
-                                        console.log('[Pricempire] Using API price as it\'s more authoritative');
-                                        updateMarketOverviewPrice(apiSteamPrice);
+                                        console.log('[Pricempire] Keeping extracted DOM price as it\'s from actual marketplace offers');
+                                        // Keep the DOM extracted price - don't override with API
                                     } else if (apiSteamPrice) {
                                         console.log('[Pricempire] API Steam price matches extracted price:', apiSteamPrice);
                                     } else {
@@ -2460,7 +1989,14 @@
     }
 
     function replaceWithSteamPrice(priceCard, steamPrice) {
-        if (!priceCard || !steamPrice) return;
+        console.log('[Pricempire] FORCE DEBUG: replaceWithSteamPrice called with:', steamPrice);
+        console.log('[Pricempire] FORCE DEBUG: window.steamBuyOrderPrice:', window.steamBuyOrderPrice);
+        console.log('[Pricempire] FORCE DEBUG: priceCard exists:', !!priceCard);
+
+        if (!priceCard || !steamPrice) {
+            console.log('[Pricempire] FORCE DEBUG: Early return - priceCard:', !!priceCard, 'steamPrice:', !!steamPrice);
+            return;
+        }
 
         console.log('[Pricempire] replaceWithSteamPrice called with:', steamPrice);
 
@@ -2698,8 +2234,14 @@
             // Try finding by class names individually
             detailContainer = priceCard.querySelector('[class*="mt-0.5"][class*="flex"][class*="items-center"][class*="gap-1"]');
         }
+
+        console.log('[Pricempire] Buy order detail container found:', !!detailContainer);
+        console.log('[Pricempire] window.steamBuyOrderPrice available:', window.steamBuyOrderPrice);
+        console.log('[Pricempire] Price card HTML snippet:', priceCard.innerHTML.substring(0, 300));
+
         if (detailContainer) {
-            // Use actual buy order price if available, otherwise calculate fallback
+            // IMPORTANT: Don't overwrite buy order price from Steam DOM section with Steam card prices
+            // Steam cards only have sell orders, not buy orders. Buy orders should only come from orange section.
             let buyOrderPrice = window.steamBuyOrderPrice;
 
             if (!buyOrderPrice) {
@@ -2710,7 +2252,7 @@
                     console.log('[Pricempire] Using estimated buy order price (fallback):', buyOrderPrice);
                 }
             } else {
-                console.log('[Pricempire] Using actual Steam buy order price:', buyOrderPrice);
+                console.log('[Pricempire] Using preserved Steam buy order price from orange section:', buyOrderPrice);
             }
 
             if (buyOrderPrice) {
@@ -2720,6 +2262,8 @@
                     <span class="hidden md:inline">buy order</span>
                 `;
                 console.log('[Pricempire] Updated buy order section with actual price:', buyOrderPrice);
+                console.log('[Pricempire] Buy order HTML after update:', detailContainer.innerHTML);
+                console.log('[Pricempire] Buy order container visible:', detailContainer.offsetParent !== null);
             }
         }
 
